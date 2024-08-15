@@ -12,28 +12,36 @@ from torchmetrics import Metric
 
 
 class MolecularMetric(Metric):
+    """Base class for calculating molecular metrics. Implements basic functionality for metric calculation and aggregation."""
+
     def __init__(self, dist_sync_on_step=False):
+        """Initializes state for metric computation."""
         super().__init__(dist_sync_on_step=dist_sync_on_step)
         self.add_state("score", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
 
     @staticmethod
     def _valid_molecule(mol):
+        """Checks if a molecule is valid and can be converted to a SMILES string."""
         return mol is not None and Chem.MolToSmiles(mol) != ""
 
     def update(self, mols):
+        """Updates the metric's state with the provided molecules."""
         scores = self.compute_score(mols)
         self.score += torch.tensor(scores).sum()
         self.total += len(mols)
 
     def compute(self):
+        """Computes the final metric score."""
         return self.score.float() / self.total.float()
 
     def compute_score(self, mols):
+        """Method to compute the score of the given molecules. Should be implemented by subclasses."""
         raise NotImplementedError("This method needs to be implemented by subclasses")
 
 
 def _avoid_sanitization_error(op):
+    """Wrapper function to handle RDKit sanitization errors gracefully."""
     try:
         return op()
     except ValueError:
@@ -41,6 +49,7 @@ def _avoid_sanitization_error(op):
 
 
 def _map_score_func(func, default: float):
+    """Maps a scoring function over a list of molecules with error handling."""
 
     def wrapped_func(mols):
         return np.array(
@@ -58,10 +67,12 @@ def _map_score_func(func, default: float):
 
 
 def _normalize_score(scores, score_range):
+    """Normalizes scores to be between 0 and 1."""
     return (scores - score_range[0]) / (score_range[1] - score_range[0])
 
 
 def _raise_norm_warning(norm):
+    """Raises a warning if normalization is specified but not used."""
     if norm is not None:
         warnings.warn(
             "Norm was specified but will not used, as in MolGan implementation."
@@ -69,6 +80,7 @@ def _raise_norm_warning(norm):
 
 
 def _constant_bump(x, x_low, x_high, decay=0.025):
+    """Applies a bump function to values, primarily for normalization and scaling."""
     return np.select(
         condlist=[x <= x_low, x >= x_high],
         choicelist=[
@@ -80,6 +92,8 @@ def _constant_bump(x, x_low, x_high, decay=0.025):
 
 
 class WOPCScore(MolecularMetric):
+    """Calculates the water-octanol partition coefficient (LogP) of molecules."""
+
     _molgan_label = "logp"
     _molgan_func = "water_octanol_partition_coefficient"
 
@@ -96,6 +110,8 @@ class WOPCScore(MolecularMetric):
 
 
 class QEDScore(MolecularMetric):
+    """Calculates the Quantitative Estimate of Drug-likeness (QED) of molecules."""
+
     _molgan_label = "qed"
     _molgan_func = "quantitative_estimation_druglikeness"
 
@@ -110,6 +126,8 @@ class QEDScore(MolecularMetric):
 
 
 class NPScore(MolecularMetric):
+    """Calculates a score based on the likeness to natural products."""
+
     _molgan_label = "np"
     _molgan_func = "natural_product"
 
@@ -126,7 +144,7 @@ class NPScore(MolecularMetric):
 
     def compute_score(self, mols):
 
-        # calculating the score
+        # Calculates the score based on a model of natural product likeness
         scores = [
             (
                 sum(
@@ -142,7 +160,7 @@ class NPScore(MolecularMetric):
             for mol in mols
         ]
 
-        # preventing score explosion for exotic molecules
+        # Logarithmic transformation for scores outside normal range
         scores = list(
             map(
                 lambda score: (
@@ -166,6 +184,8 @@ class NPScore(MolecularMetric):
 
 
 class SASScore(MolecularMetric):
+    """Calculates the synthetic accessibility score of molecules."""
+
     _molgan_label = "sas"
     _molgan_func = "synthetic_accessibility"
 
@@ -261,6 +281,8 @@ class SASScore(MolecularMetric):
 
 
 class NoveltyScore(MolecularMetric):
+    """Calculates the novelty of molecules compared to a given dataset."""
+
     _molgan_label = "novelty"
     _molgan_func = "novel"
 
@@ -279,6 +301,8 @@ class NoveltyScore(MolecularMetric):
 
 
 class DCScore(MolecularMetric):
+    """Combines multiple molecular metrics to evaluate drug candidacy."""
+
     _molgan_label = "dc"
     _molgan_func = "drugcandidate"
 
@@ -297,6 +321,8 @@ class DCScore(MolecularMetric):
 
 
 class UniqueScore(MolecularMetric):
+    """Calculates the uniqueness of molecules within a batch."""
+
     _molgan_label = "unique"
     _molgan_func = "unique"
 
@@ -316,6 +342,8 @@ class UniqueScore(MolecularMetric):
 
 
 class DiversityScore(MolecularMetric):
+    """Calculates the chemical diversity of molecules within a batch relative to a dataset."""
+
     _molgan_label = "diversity"
     _molgan_func = "diversity"
 
@@ -344,6 +372,8 @@ class DiversityScore(MolecularMetric):
 
 
 class ValidityScore(MolecularMetric):
+    """Checks the chemical validity of molecules, ensuring they are properly formed without disjoint fragments."""
+
     _molgan_label = "validity"
     _molgan_func = "valid"
 
