@@ -2,10 +2,11 @@ import gzip
 import math
 import pickle
 import warnings
+from functools import partial
 
 import numpy as np
 import torch
-from rdkit import Chem
+from rdkit import Chem, DataStructs
 from rdkit.Chem import QED, Crippen
 from torchmetrics import Metric
 
@@ -80,7 +81,7 @@ def _constant_bump(x, x_low, x_high, decay=0.025):
 
 class WOPCScore(MolecularMetric):
     _molgan_label = "logp"
-    _molgan_long_name = "water_octanol_partition_coefficient"
+    _molgan_func = "water_octanol_partition_coefficient"
 
     def __init__(self, norm=False, dist_sync_on_step=False):
         super().__init__(dist_sync_on_step=dist_sync_on_step)
@@ -96,7 +97,7 @@ class WOPCScore(MolecularMetric):
 
 class QEDScore(MolecularMetric):
     _molgan_label = "qed"
-    _molgan_long_name = "quantitative_estimation_druglikeness"
+    _molgan_func = "quantitative_estimation_druglikeness"
 
     def __init__(self, norm=None, dist_sync_on_step=False):
         super().__init__(dist_sync_on_step=dist_sync_on_step)
@@ -110,7 +111,7 @@ class QEDScore(MolecularMetric):
 
 class NPScore(MolecularMetric):
     _molgan_label = "np"
-    _molgan_long_name = "natural_product"
+    _molgan_func = "natural_product"
 
     def __init__(
         self,
@@ -166,7 +167,7 @@ class NPScore(MolecularMetric):
 
 class SASScore(MolecularMetric):
     _molgan_label = "sas"
-    _molgan_long_name = "synthetic_accessibility"
+    _molgan_func = "synthetic_accessibility"
 
     def __init__(
         self,
@@ -261,7 +262,7 @@ class SASScore(MolecularMetric):
 
 class NoveltyScore(MolecularMetric):
     _molgan_label = "novelty"
-    _molgan_long_name = "novel"
+    _molgan_func = "novel"
 
     def __init__(self, data, dist_sync_on_step=False):
         super().__init__(dist_sync_on_step=dist_sync_on_step)
@@ -279,7 +280,7 @@ class NoveltyScore(MolecularMetric):
 
 class DCScore(MolecularMetric):
     _molgan_label = "dc"
-    _molgan_long_name = "drugcandidate"
+    _molgan_func = "drugcandidate"
 
     def __init__(self, data, dist_sync_on_step=False):
         super().__init__(dist_sync_on_step=dist_sync_on_step)
@@ -297,7 +298,7 @@ class DCScore(MolecularMetric):
 
 class UniqueScore(MolecularMetric):
     _molgan_label = "unique"
-    _molgan_long_name = "unique"
+    _molgan_func = "unique"
 
     def compute_score(self, mols):
         smiles = list(
@@ -314,9 +315,58 @@ class UniqueScore(MolecularMetric):
         return scores
 
 
+class DiversityScore(MolecularMetric):
+    _molgan_label = "diversity"
+    _molgan_func = "diversity"
+
+    def __init__(self, data, dist_sync_on_step=False):
+        super().__init__(dist_sync_on_step=dist_sync_on_step)
+        self.data = data
+
+    def compute_score(self, mols):
+        def _compute_diversity(mol, fps):
+            ref_fps = Chem.rdMolDescriptors.GetMorganFingerprintAsBitVect(
+                mol, 4, nBits=2048
+            )
+            dist = DataStructs.BulkTanimotoSimilarity(ref_fps, fps, returnDistance=True)
+            score = np.mean(dist)
+            return score
+
+        rand_mols = np.random.choice(self.data.data, 100)
+        fps = [
+            Chem.rdMolDescriptors.GetMorganFingerprintAsBitVect(mol, 4, nBits=2048)
+            for mol in rand_mols
+        ]
+        scores = _map_score_func(partial(_compute_diversity, fps=fps), 0.0)(mols)
+        scores = _normalize_score(scores, (0.9, 0.945))
+        scores = np.clip(scores, 0.0, 1.0)
+        return scores
+
+
+class ValidityScore(MolecularMetric):
+    _molgan_label = "validity"
+    _molgan_func = "valid"
+
+    def compute_score(self, mols):
+        def _compute_valid(mol):
+            s = Chem.MolToSmiles(mol) if mol is not None else ""
+            score = "*" not in s and "." not in s and s != ""
+            return float(score)
+
+        scores = _map_score_func(_compute_valid, 0.0)(mols)
+        return scores
+
+
 if __name__ == "__main__":
     mols = [Chem.MolFromSmiles("CCO"), Chem.MolFromSmiles("CCC"), None]
-    for metric in [WOPCScore(), QEDScore(), NPScore(), SASScore(), UniqueScore()]:
+    for metric in [
+        WOPCScore(),
+        QEDScore(),
+        NPScore(),
+        SASScore(),
+        UniqueScore(),
+        ValidityScore(),
+    ]:
         metric.update(mols)
         score = metric.compute()
         scores = metric.compute_score(mols)
