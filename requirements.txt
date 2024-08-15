@@ -1,0 +1,5 @@
+numpy==2.0.1
+rdkit==2024.3.5
+torch==2.4.0
+torchmetrics==1.4.1
+tqdm==4.66.5
