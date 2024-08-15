@@ -25,6 +25,10 @@ class SparseMolecularDataset(Dataset):
 
     def __init__(self, filename, *, add_h=False, max_atoms=None):
         """Initialize the dataset with a file path and optional transformations."""
+        if not filename.endswith((".sdf", ".smi")):
+            raise ValueError(
+                "Invalid file format! Please provide an SDF or SMILES file."
+            )
         self.filename = filename
         self.add_h = add_h
         self.max_atoms = max_atoms
@@ -54,6 +58,7 @@ class SparseMolecularDataset(Dataset):
 
     def _extract_molecules(self):
         """Extracts molecules from the specified file and filters them based on specified criteria."""
+        print("Extracting molecules from {} ...".format(self.filename))
         # Read molecules from an SDF or SMILES file
         if self.filename.endswith(".sdf"):
             mols = list(
