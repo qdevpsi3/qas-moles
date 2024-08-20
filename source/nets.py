@@ -1,6 +1,8 @@
+import torch
 import torch.nn as nn
+from torchvision.ops import MLP
 
-from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
+from .layers import GraphAggregation, GraphConvolution
 
 
 class Generator(nn.Module):
@@ -15,8 +17,12 @@ class Generator(nn.Module):
         self.nodes = nodes
         self.dropout_rate = dropout_rate
 
-        self.activation_f = nn.Tanh()
-        self.multi_dense_layers = MultiDenseLayers(z_dim, conv_dims, self.activation_f)
+        self.multi_dense_layers = MLP(
+            z_dim,
+            conv_dims,
+            activation_layer=nn.Tanh,
+            dropout=self.dropout_rate,
+        )
         self.edges_layer = nn.Linear(conv_dims[-1], edges * vertexes * vertexes)
         self.nodes_layer = nn.Linear(conv_dims[-1], vertexes * nodes)
         self.dropout = nn.Dropout(dropout_rate)
@@ -39,7 +45,13 @@ class Discriminator(nn.Module):
     """Discriminator network of MolGAN"""
 
     def __init__(
-        self, conv_dims, m_dim, b_dim, with_features=False, f_dim=0, dropout_rate=0.0
+        self,
+        conv_dims,
+        m_dim,
+        b_dim,
+        with_features=False,
+        f_dim=0,
+        dropout_rate=0.0,
     ):
         super(Discriminator, self).__init__()
         self.conv_dims = conv_dims

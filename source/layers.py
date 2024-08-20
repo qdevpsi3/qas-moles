@@ -128,26 +128,6 @@ class GraphAggregation(nn.Module):
         return output
 
 
-class MultiDenseLayers(nn.Module):
-    def __init__(self, aux_unit, linear_units, activation=None, dropout_rate=0.0):
-        super(MultiDenseLayers, self).__init__()
-        self.aux_unit = aux_unit
-        self.linear_units = linear_units
-        self.activation = activation
-        self.dropout_rate = dropout_rate
-        layers = list()
-        for c0, c1 in zip([aux_unit] + linear_units[:-1], linear_units):
-            layers.append(nn.Linear(c0, c1))
-            if activation is not None:
-                layers.append(activation)
-            layers.append(nn.Dropout(dropout_rate))
-        self.linear_layers = nn.Sequential(*layers)
-
-    def forward(self, inputs):
-        hidden_tensor = self.linear_layers(inputs)
-        return hidden_tensor
-
-
 class GraphConvolution(nn.Module):
     def __init__(
         self,
