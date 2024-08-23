@@ -45,8 +45,8 @@ class SparseMolecularDataset(Dataset):
     def __getitem__(self, idx):
         """Retrieve a sample from the dataset by index."""
         sample = {
-            "mol": self.valid_mols[idx],
-            "smiles": self.smiles[idx],
+            # "mol": self.valid_mols[idx],
+            # "smiles": self.smiles[idx],
             "S": self.data_S[idx],
             "A": self.data_A[idx],
             "X": self.data_X[idx],

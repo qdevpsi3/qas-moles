@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torchvision.ops import MLP
 
-from .layers import GraphAggregation, GraphConvolution
+from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
 
 
 class Generator(nn.Module):
