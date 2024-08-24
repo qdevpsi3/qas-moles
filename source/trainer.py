@@ -1,6 +1,9 @@
 import torch
 import torch.nn.functional as F
 from lightning import LightningModule
+from torch import nn
+
+from .metrics import ALL_METRICS
 
 
 def label2onehot(labels, dim):
@@ -54,18 +57,31 @@ class MolGAN(LightningModule):
         *,
         grad_penalty=10.0,
         process_method="soft_gumbel",
+        agg_method="sum",
         m_dim=5,
         b_dim=5,
+        metrics=None,
     ):
         super().__init__()
+        if metrics is None:
+            metrics = ["logp", "sas", "qed", "unique"]
         self.save_hyperparameters(
             logger=False,
-            ignore=["generator", "discriminator", "predictor", "optimizer"],
+            ignore=[
+                "generator",
+                "discriminator",
+                "predictor",
+                "optimizer",
+                "metrics",
+            ],
         )
         self.generator = generator
         self.discriminator = discriminator
         self.predictor = predictor
         self.optimizer = optimizer
+        self.metrics = metrics
+
+        self.metrics_fn = dict((metric, ALL_METRICS[metric]()) for metric in metrics)
 
     def configure_optimizers(self):
         g_optim = self.optimizer(self.generator.parameters())
@@ -122,6 +138,9 @@ class MolGAN(LightningModule):
     def _apply_discriminator(self, a, x):
         return self.discriminator(a, None, x)[0]
 
+    def _apply_predictor(self, a, x):
+        return torch.sigmoid(self.predictor(a, None, x)[0])
+
     def _compute_discriminator_loss(self, batch):
         a_real, x_real = batch["A"], batch["X"]
         a_real, x_real = self._process_real_data(a_real, x_real)
@@ -129,7 +148,7 @@ class MolGAN(LightningModule):
         a_fake, x_fake = a_fake.detach(), x_fake.detach()  # detach fake data
         a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
         d_fake = self._apply_discriminator(a_fake, x_fake)
-        d_real = self._apply_discriminator(*batch)
+        d_real = self._apply_discriminator(a_real, x_real)
         grad_penalty = self._calculate_gradient_penalty(
             torch.cat([a_real, a_fake]), torch.cat([x_real, x_fake])
         )
@@ -140,5 +159,40 @@ class MolGAN(LightningModule):
         a_fake, x_fake = self._generate_fake_data(batch)
         a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
         d_fake = self._apply_discriminator(a_fake, x_fake)
-        g_loss = -d_fake.mean()
+        gan_loss = -d_fake.mean()
+        rl_loss = -self.apply_predictor(a_fake, x_fake)
+        g_loss = gan_loss + rl_loss
         return g_loss
+
+    def _compute_predictor_loss(self, batch):
+        a_real, x_real = batch["A"], batch["X"]
+        a_real, x_real = self._process_real_data(a_real, x_real)
+        metrics_real = self._compute_metrics(a_real, x_real)
+        v_real = sum(
+            self.metrics_fn[metric](metrics_real[metric]) for metric in self.metrics
+        )
+        v_pred_real = self._apply_predictor(a_real, x_real)
+        a_fake, x_fake = self._generate_fake_data(batch)
+        a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
+        v_fake = self._apply_predictor(a_fake, x_fake)
+        metrics_fake = self._compute_metrics(a_fake, x_fake)
+        v_fake = sum(
+            self.metrics_fn[metric](metrics_fake[metric]) for metric in self.metrics
+        )
+        p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
+        p_loss_fake = nn.HuberLoss()(v_fake, v_fake)
+        p_loss = p_loss_real + p_loss_fake
+        return p_loss
+
+    def _convert_to_molecules(self, a, x):
+        a, x = torch.max(a, -1)[1], torch.max(x, -1)[1]
+        a, x = a.cpu().numpy(), x.cpu().numpy()
+        mols = [self.train_dataset.matrices2mol(a, x)]
+        return mols
+
+    def _compute_metrics(self, a, x):
+        mols = self._convert_to_molecules(a, x)
+        metrics = {}
+        for metric in self.metrics:
+            metrics[metric] = ALL_METRICS[metric](mols)
+        return metrics
