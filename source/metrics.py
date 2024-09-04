@@ -387,6 +387,18 @@ class ValidityScore(MolecularMetric):
         return scores
 
 
+ALL_METRICS = {
+    "logp": WOPCScore,
+    "qed": QEDScore,
+    "np": NPScore,
+    "sas": SASScore,
+    "novelty": NoveltyScore,
+    "dc": DCScore,
+    "unique": UniqueScore,
+    "diversity": DiversityScore,
+    "validity": ValidityScore,
+}
+
 if __name__ == "__main__":
     mols = [Chem.MolFromSmiles("CCO"), Chem.MolFromSmiles("CCC"), None]
     for metric in [

@@ -160,4 +160,5 @@ cython_debug/
 #.idea/
 
 data/*
-!data/download_dataset.sh
+!data/download_data.sh
+lightning_logs/*

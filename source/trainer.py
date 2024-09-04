@@ -58,11 +58,10 @@ class MolGAN(LightningModule):
         grad_penalty=10.0,
         process_method="soft_gumbel",
         agg_method="sum",
-        m_dim=5,
-        b_dim=5,
         metrics=None,
     ):
         super().__init__()
+        self.automatic_optimization = False  # Disable automatic optimization
         if metrics is None:
             metrics = ["logp", "sas", "qed", "unique"]
         self.save_hyperparameters(
@@ -90,6 +89,7 @@ class MolGAN(LightningModule):
         return [g_optim, d_optim, p_optim], []
 
     def _calculate_gradient_penalty(self, x, x_hat):
+        return 0
         alpha = torch.rand(x.size(0), 1, 1, 1, device=self.device)
         interpolated = alpha * x + (1 - alpha) * x_hat
         interpolated.requires_grad_(True)
@@ -105,27 +105,41 @@ class MolGAN(LightningModule):
         grad_penalty = ((gradient_norm - 1) ** 2).mean()
         return grad_penalty * self.hparams.grad_penalty
 
-    def training_step(self, batch, batch_idx, optimizer_idx):
-        x, _ = batch
+    def training_step(self, batch, batch_idx):
+        # Access the optimizers
+        g_optim, d_optim, p_optim = self.optimizers()
+
         # train generator
-        if optimizer_idx == 0:
-            return self.generator_step(x)
+        g_loss = self._compute_generator_loss(batch)
+        self.manual_backward(g_loss)
+        g_optim.step()
+        g_optim.zero_grad()
+
         # train discriminator
-        if optimizer_idx == 1:
-            return self.discriminator_step(x)
-        return None
+        d_loss = self._compute_discriminator_loss(batch)
+        self.manual_backward(d_loss)
+        d_optim.step()
+        d_optim.zero_grad()
+
+        # train predictor
+        p_loss = self._compute_predictor_loss(batch)
+        self.manual_backward(p_loss)
+        p_optim.step()
+        p_optim.zero_grad()
+
+        return {"g_loss": g_loss, "d_loss": d_loss, "p_loss": p_loss}
 
     def _generate_noise(self, batch_size):
-        return torch.rand(batch_size, self.hparams.z_dim, device=self.device)
+        return torch.rand(batch_size, self.generator.z_dim, device=self.device)
 
     def _generate_fake_data(self, batch):
-        z = self._generate_noise(batch.size(0))
+        z = self._generate_noise(batch["X"].size(0))
         a_fake, x_fake = self.generator(z)
         return a_fake, x_fake
 
     def _process_real_data(self, a_real, x_real):
-        a_real = label2onehot(a_real, self.hparams.b_dim)
-        x_real = label2onehot(x_real, self.hparams.m_dim)
+        a_real = label2onehot(a_real, self.get_b_dim())
+        x_real = label2onehot(x_real, self.get_m_dim())
         return a_real, x_real
 
     def _process_fake_data(self, a_fake, x_fake):
@@ -160,7 +174,7 @@ class MolGAN(LightningModule):
         a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
         d_fake = self._apply_discriminator(a_fake, x_fake)
         gan_loss = -d_fake.mean()
-        rl_loss = -self.apply_predictor(a_fake, x_fake)
+        rl_loss = -self._apply_predictor(a_fake, x_fake).mean()
         g_loss = gan_loss + rl_loss
         return g_loss
 
@@ -187,7 +201,7 @@ class MolGAN(LightningModule):
     def _convert_to_molecules(self, a, x):
         a, x = torch.max(a, -1)[1], torch.max(x, -1)[1]
         a, x = a.cpu().numpy(), x.cpu().numpy()
-        mols = [self.train_dataset.matrices2mol(a, x)]
+        mols = [self.matrices2mol(a, x)]
         return mols
 
     def _compute_metrics(self, a, x):
@@ -196,3 +210,9 @@ class MolGAN(LightningModule):
         for metric in self.metrics:
             metrics[metric] = ALL_METRICS[metric](mols)
         return metrics
+
+    def get_m_dim(self):
+        return self.generator.nodes
+
+    def get_b_dim(self):
+        return self.generator.edges

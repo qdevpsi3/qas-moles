@@ -1,8 +1,26 @@
+import pickle
+
 import numpy as np
 from lightning import LightningDataModule
 from rdkit import Chem, RDLogger
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
+
+# from .utils import load_pickle, save_pickle
+
+
+def load_pickle(filepath):
+    with open(filepath, "rb") as f:
+        loaded = pickle.load(f)
+    print(f"Pickle loaded from {filepath}")
+    return loaded
+
+
+def save_pickle(instance, filepath):
+    with open(filepath, "wb") as f:
+        pickle.dump(instance, f)
+    print(f"Pickle saved to {filepath}")
+
 
 # Set DEBUG to False for production environment where detailed logging is not required
 DEBUG = False
@@ -337,10 +355,10 @@ class SparseMolecularDataModule(LightningDataModule):
 
     def setup(self, stage=None):
         # Create and setup the dataset
-        self.dataset = SparseMolecularDataset(
-            self.filename, add_h=self.add_h, max_atoms=self.max_atoms
-        )
-
+        # self.dataset = SparseMolecularDataset(
+        #     self.filename, add_h=self.add_h, max_atoms=self.max_atoms
+        # )
+        self.dataset = load_pickle("./data/gdb9_dataset.pkl")
         # Calculate split sizes based on the provided tuple ratios
         train_size = int(self.train_test_val_split[0] * len(self.dataset))
         val_size = int(self.train_test_val_split[1] * len(self.dataset))
@@ -365,14 +383,15 @@ class SparseMolecularDataModule(LightningDataModule):
 
 
 if __name__ == "__main__":
-    # dataset = SparseMolecularDataset(
-    #     "./data/gdb9.sdf",
-    #     max_atoms=9,
-    #     add_h=False,
-    # )
-    datamodule = SparseMolecularDataModule(
+    dataset = SparseMolecularDataset(
         "./data/gdb9.sdf",
         max_atoms=9,
         add_h=False,
     )
-    datamodule.setup()
+    save_pickle(dataset, "./data/gdb9_dataset.pkl")
+    # datamodule = SparseMolecularDataModule(
+    #     "./data/gdb9.sdf",
+    #     max_atoms=9,
+    #     add_h=False,
+    # )
+    # datamodule.setup()
