@@ -66,8 +66,8 @@ class MolGAN(LightningModule):
         if metrics is None:
             metrics = ["logp", "sas", "qed", "unique"]
         self.save_hyperparameters(
-            logger=False,
             ignore=[
+                "dataset",
                 "generator",
                 "discriminator",
                 "predictor",
