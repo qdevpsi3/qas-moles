@@ -168,12 +168,9 @@ class MolGAN(LightningModule):
             )
         return {"g_loss": g_loss, "d_loss": d_loss, "p_loss": p_loss}
 
-    def _generate_noise(self, batch_size):
-        return torch.rand(batch_size, self.generator.z_dim, device=self.device)
-
     def _generate_fake_data(self, batch):
-        z = self._generate_noise(batch.features["X"].size(0))
-        a_fake, x_fake = self.generator(z)
+        batch_size = batch.features["X"].size(0)
+        a_fake, x_fake = self.generator(batch_size)
         return a_fake, x_fake
 
     def _process_real_data(self, a_real, x_real):

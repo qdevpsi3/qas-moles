@@ -41,7 +41,11 @@ class Generator(nn.Module):
         self.nodes_layer = nn.Linear(self.conv_dims[-1], self.vertexes * self.nodes)
         self.dropout_layer = nn.Dropout(self.dropout)
 
-    def forward(self, z):
+    def _generate_z(self, batch_size):
+        return torch.rand(batch_size, self.z_dim)
+
+    def forward(self, batch_size):
+        z = self._generate_z(batch_size)
         output = self.multi_dense_layers(z)
         edges_logits = self.edges_layer(output).view(
             -1, self.edges, self.vertexes, self.vertexes
