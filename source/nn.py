@@ -3,6 +3,7 @@ import torch.nn as nn
 from torchvision.ops import MLP
 
 from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
+from .quantum import NoiseQuantumGenerator, PatchQuantumGenerator
 
 
 class Generator(nn.Module):
@@ -22,9 +23,6 @@ class Generator(nn.Module):
         self.z_dim = z_dim
         self.dropout = dropout
 
-        self._initialize()
-
-    def _initialize(self):
         self.vertexes = self.dataset.num_vertices
         self.edges = self.dataset.bond_num_types
         self.nodes = self.dataset.atom_num_types
@@ -59,6 +57,32 @@ class Generator(nn.Module):
         )
 
         return edges_logits, nodes_logits
+
+
+class QuantumGenerator(nn.Module):
+    def __init__(
+        self,
+        dataset,
+        *,
+        noise_num_qubits=8,
+        noise_depth=3,
+        patch_num_generators=45,
+    ):
+        super(QuantumGenerator, self).__init__()
+        self.dataset = dataset
+
+        self.noise_num_qubits = noise_num_qubits
+        self.noise_depth = noise_depth
+        self.patch_num_generators = patch_num_generators
+
+        self.noise_generator = NoiseQuantumGenerator(
+            self.noise_num_qubits, self.noise_depth
+        )
+        self.patch_generator = PatchQuantumGenerator(self.patch_num_generators)
+
+    def forward(self, batch_size):
+        noise = self.noise_generator(batch_size)
+        return self.patch_generator(noise)
 
 
 class Discriminator(nn.Module):
