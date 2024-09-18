@@ -137,6 +137,7 @@ class MolGAN(LightningModule):
             on_epoch=True,
             prog_bar=True,
             logger=True,
+            batch_size=batch.features["X"].size(0),
         )
         self.log(
             "disc_loss",
@@ -145,6 +146,7 @@ class MolGAN(LightningModule):
             on_epoch=True,
             prog_bar=True,
             logger=True,
+            batch_size=batch.features["X"].size(0),
         )
         self.log(
             "pred_loss",
@@ -153,6 +155,7 @@ class MolGAN(LightningModule):
             on_epoch=True,
             prog_bar=True,
             logger=True,
+            batch_size=batch.features["X"].size(0),
         )
         for key, value in p_aux.items():
             self.log(
@@ -162,6 +165,7 @@ class MolGAN(LightningModule):
                 on_epoch=True,
                 prog_bar=True,
                 logger=True,
+                batch_size=batch.features["X"].size(0),
             )
         return {"g_loss": g_loss, "d_loss": d_loss, "p_loss": p_loss}
 

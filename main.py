@@ -5,9 +5,9 @@ from lightning import Trainer
 from lightning.pytorch.loggers import MLFlowLogger
 from torch.optim import Adam
 
-from source.datasets import MolecularDataModule, MolecularDataset
+from source.data import MolecularDataModule, MolecularDataset
 from source.model import MolGAN
-from source.nets import Discriminator, Generator
+from source.nn import Discriminator, Generator
 
 
 def parse_args():
@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument(
         "--data_path",
         type=str,
-        default="./data/gdb9_molecular_dataset.pkl",
+        default="./data/gdb9_molecular_dataset_small.pkl",
         help="Path to the molecular dataset file",
     )
     parser.add_argument(
@@ -45,6 +45,7 @@ def parse_args():
         default="soft_gumbel",
         help="Method to process the output probabilities ('soft_gumbel', 'hard_gumbel')",
     )
+    parser.add_argument("--accelerator", type=str, default="cpu", help="Device to use")
     return parser.parse_args()
 
 
@@ -76,8 +77,9 @@ def main():
     mlflow_logger = MLFlowLogger(experiment_name="molgan")
     trainer = Trainer(
         max_epochs=args.max_epochs,
-        accelerator="cpu",
+        accelerator=args.accelerator,
         logger=mlflow_logger,
+        log_every_n_steps=10,
     )
 
     # Start training
