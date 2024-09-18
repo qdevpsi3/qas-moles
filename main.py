@@ -7,7 +7,7 @@ from torch.optim import Adam
 
 from source.data import MolecularDataModule, MolecularDataset
 from source.model import MolGAN
-from source.nn import Discriminator, Generator
+from source.nn import Discriminator, Generator, QuantumGenerator
 
 
 def parse_args():
