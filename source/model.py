@@ -90,22 +90,20 @@ class MolGAN(LightningModule):
         p_optim = self.optimizer(self.predictor.parameters())
         return [g_optim, d_optim, p_optim], []
 
-    def _calculate_gradient_penalty(self, x, x_hat):
-        return 0
-        alpha = torch.rand(x.size(0), 1, 1, 1, device=self.device)
-        interpolated = alpha * x + (1 - alpha) * x_hat
-        interpolated.requires_grad_(True)
-        scores_on_interpolated = self.discriminator(interpolated)
-        gradients = torch.autograd.grad(
-            outputs=scores_on_interpolated,
-            inputs=interpolated,
-            grad_outputs=torch.ones_like(scores_on_interpolated),
-            create_graph=True,
+    def _calculate_gradient_penalty(self, y, x):
+        """Compute gradient penalty: (L2_norm(dy/dx) - 1)**2."""
+        weight = torch.ones(y.size()).to(self.device)
+        dydx = torch.autograd.grad(
+            outputs=y,
+            inputs=x,
+            grad_outputs=weight,
             retain_graph=True,
+            create_graph=True,
+            only_inputs=True,
         )[0]
-        gradient_norm = gradients.norm(2, dim=1)
-        grad_penalty = ((gradient_norm - 1) ** 2).mean()
-        return grad_penalty * self.hparams.grad_penalty
+        dydx = dydx.view(dydx.size(0), -1)
+        dydx_l2norm = torch.sqrt(torch.sum(dydx**2, dim=1))
+        return torch.mean((dydx_l2norm - 1) ** 2)
 
     def training_step(self, batch, batch_idx):
         # Access the optimizers
@@ -203,10 +201,18 @@ class MolGAN(LightningModule):
         a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
         d_fake = self._apply_discriminator(a_fake, x_fake)
         d_real = self._apply_discriminator(a_real, x_real)
-        grad_penalty = self._calculate_gradient_penalty(
-            torch.cat([a_real, a_fake]), torch.cat([x_real, x_fake])
-        )
-        d_loss = d_fake.mean() - d_real.mean() + grad_penalty
+        d_loss = d_fake.mean() - d_real.mean()
+        # Compute gradient penalty
+        eps = torch.rand(a_real.size(0), 1, 1, 1).to(self.device)
+        a_inter = (eps * a_fake + (1.0 - eps) * a_real).requires_grad_(True)
+        x_inter = (
+            eps.squeeze(-1) * x_fake + (1.0 - eps.squeeze(-1)) * x_real
+        ).requires_grad_(True)
+        d_inter = self._apply_discriminator(a_inter, x_inter)
+        x_penalty = self._calculate_gradient_penalty(d_inter, x_inter)
+        a_penalty = self._calculate_gradient_penalty(d_inter, a_inter)
+        grad_penalty = x_penalty + a_penalty
+        d_loss += self.hparams.grad_penalty * grad_penalty
         return d_loss
 
     def _compute_generator_loss(self, batch):
