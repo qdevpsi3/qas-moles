@@ -50,6 +50,7 @@ def postprocess(inputs, method, temperature=1.0):
 class MolGAN(LightningModule):
     def __init__(
         self,
+        dataset,
         generator,
         discriminator,
         predictor,
@@ -74,6 +75,7 @@ class MolGAN(LightningModule):
                 "metrics",
             ],
         )
+        self.dataset = dataset
         self.generator = generator
         self.discriminator = discriminator
         self.predictor = predictor
@@ -133,7 +135,7 @@ class MolGAN(LightningModule):
         return torch.rand(batch_size, self.generator.z_dim, device=self.device)
 
     def _generate_fake_data(self, batch):
-        z = self._generate_noise(batch["X"].size(0))
+        z = self._generate_noise(batch.features["X"].size(0))
         a_fake, x_fake = self.generator(z)
         return a_fake, x_fake
 
@@ -156,7 +158,7 @@ class MolGAN(LightningModule):
         return torch.sigmoid(self.predictor(a, None, x)[0])
 
     def _compute_discriminator_loss(self, batch):
-        a_real, x_real = batch["A"], batch["X"]
+        a_real, x_real = batch.features["A"], batch.features["X"]
         a_real, x_real = self._process_real_data(a_real, x_real)
         a_fake, x_fake = self._generate_fake_data(batch)
         a_fake, x_fake = a_fake.detach(), x_fake.detach()  # detach fake data
@@ -179,36 +181,39 @@ class MolGAN(LightningModule):
         return g_loss
 
     def _compute_predictor_loss(self, batch):
-        a_real, x_real = batch["A"], batch["X"]
+        a_real, x_real = batch.features["A"], batch.features["X"]
         a_real, x_real = self._process_real_data(a_real, x_real)
         metrics_real = self._compute_metrics(a_real, x_real)
         v_real = sum(
-            self.metrics_fn[metric](metrics_real[metric]) for metric in self.metrics
-        )
-        v_pred_real = self._apply_predictor(a_real, x_real)
+            v for metric, v in metrics_real.items() if metric in self.metrics
+        ) / len(self.metrics)
         a_fake, x_fake = self._generate_fake_data(batch)
         a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
         v_fake = self._apply_predictor(a_fake, x_fake)
         metrics_fake = self._compute_metrics(a_fake, x_fake)
         v_fake = sum(
-            self.metrics_fn[metric](metrics_fake[metric]) for metric in self.metrics
-        )
+            v for metric, v in metrics_fake.items() if metric in self.metrics
+        ) / len(self.metrics)
+        v_pred_real = self._apply_predictor(a_real, x_real)[..., 0]
+        v_pred_fake = self._apply_predictor(a_fake, x_fake)[..., 0]
+        v_real = torch.from_numpy(v_real).to(self.device).float()
+        v_fake = torch.from_numpy(v_fake).to(self.device).float()
         p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
-        p_loss_fake = nn.HuberLoss()(v_fake, v_fake)
+        p_loss_fake = nn.HuberLoss()(v_fake, v_pred_fake)
         p_loss = p_loss_real + p_loss_fake
         return p_loss
 
     def _convert_to_molecules(self, a, x):
         a, x = torch.max(a, -1)[1], torch.max(x, -1)[1]
         a, x = a.cpu().numpy(), x.cpu().numpy()
-        mols = [self.matrices2mol(a, x)]
+        mols = [self.dataset.matrices2mol(_x, _a, strict=True) for _a, _x in zip(a, x)]
         return mols
 
     def _compute_metrics(self, a, x):
         mols = self._convert_to_molecules(a, x)
         metrics = {}
         for metric in self.metrics:
-            metrics[metric] = ALL_METRICS[metric](mols)
+            metrics[metric] = ALL_METRICS[metric]().compute_score(mols)
         return metrics
 
     def get_m_dim(self):
