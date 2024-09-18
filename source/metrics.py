@@ -1,14 +1,17 @@
 import gzip
 import math
 import pickle
-import warnings
 from functools import partial
 
 import numpy as np
 import torch
-from rdkit import Chem, DataStructs
+from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import QED, Crippen
 from torchmetrics import Metric
+
+# Suppress RDKit warnings using RDLogger
+lg = RDLogger.logger()
+lg.setLevel(RDLogger.CRITICAL)
 
 
 class MolecularMetric(Metric):
