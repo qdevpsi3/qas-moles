@@ -8,35 +8,51 @@ from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
 class Generator(nn.Module):
     """Generator network of MolGAN"""
 
-    def __init__(self, conv_dims, z_dim, vertexes, edges, nodes, dropout_rate):
+    def __init__(
+        self,
+        dataset,
+        *,
+        conv_dims=[128, 256, 512],
+        z_dim=8,
+        dropout=0.0,
+    ):
         super(Generator, self).__init__()
+        self.dataset = dataset
         self.conv_dims = conv_dims
         self.z_dim = z_dim
-        self.vertexes = vertexes
-        self.edges = edges
-        self.nodes = nodes
-        self.dropout_rate = dropout_rate
+        self.dropout = dropout
+
+        self._initialize()
+
+    def _initialize(self):
+        self.vertexes = self.dataset.num_vertices
+        self.edges = self.dataset.bond_num_types
+        self.nodes = self.dataset.atom_num_types
 
         self.multi_dense_layers = MLP(
-            z_dim,
-            conv_dims,
+            self.z_dim,
+            self.conv_dims,
             activation_layer=nn.Tanh,
-            dropout=self.dropout_rate,
+            dropout=self.dropout,
         )
-        self.edges_layer = nn.Linear(conv_dims[-1], edges * vertexes * vertexes)
-        self.nodes_layer = nn.Linear(conv_dims[-1], vertexes * nodes)
-        self.dropout = nn.Dropout(dropout_rate)
+        self.edges_layer = nn.Linear(
+            self.conv_dims[-1], self.edges * self.vertexes * self.vertexes
+        )
+        self.nodes_layer = nn.Linear(self.conv_dims[-1], self.vertexes * self.nodes)
+        self.dropout_layer = nn.Dropout(self.dropout)
 
-    def forward(self, x):
-        output = self.multi_dense_layers(x)
+    def forward(self, z):
+        output = self.multi_dense_layers(z)
         edges_logits = self.edges_layer(output).view(
             -1, self.edges, self.vertexes, self.vertexes
         )
         edges_logits = (edges_logits + edges_logits.permute(0, 1, 3, 2)) / 2
-        edges_logits = self.dropout(edges_logits.permute(0, 2, 3, 1))
+        edges_logits = self.dropout_layer(edges_logits.permute(0, 2, 3, 1))
 
         nodes_logits = self.nodes_layer(output)
-        nodes_logits = self.dropout(nodes_logits.view(-1, self.vertexes, self.nodes))
+        nodes_logits = self.dropout_layer(
+            nodes_logits.view(-1, self.vertexes, self.nodes)
+        )
 
         return edges_logits, nodes_logits
 
@@ -46,36 +62,43 @@ class Discriminator(nn.Module):
 
     def __init__(
         self,
-        conv_dims,
-        m_dim,
-        b_dim,
+        dataset,
+        *,
+        conv_dims=[[128, 64], 128, [128, 64]],
         with_features=False,
         f_dim=0,
-        dropout_rate=0.0,
+        dropout=0.0,
     ):
         super(Discriminator, self).__init__()
+        self.dataset = dataset
         self.conv_dims = conv_dims
-        self.m_dim = m_dim
-        self.b_dim = b_dim
         self.with_features = with_features
         self.f_dim = f_dim
-        self.dropout_rate = dropout_rate
+        self.dropout = dropout
 
+        self._initialize()
+
+    def _initialize(self):
+        m_dim = self.dataset.atom_num_types
+        b_dim = self.dataset.bond_num_types - 1
         self.activation_f = nn.Tanh()
-        graph_conv_dim, aux_dim, linear_dim = conv_dims
+        graph_conv_dim, aux_dim, linear_dim = self.conv_dims
         self.gcn_layer = GraphConvolution(
-            m_dim, graph_conv_dim, b_dim, with_features, f_dim, dropout_rate
+            m_dim, graph_conv_dim, b_dim, self.with_features, self.f_dim, self.dropout
         )
         self.agg_layer = GraphAggregation(
             graph_conv_dim[-1] + m_dim,
             aux_dim,
             self.activation_f,
-            with_features,
-            f_dim,
-            dropout_rate,
+            self.with_features,
+            self.f_dim,
+            self.dropout,
         )
         self.multi_dense_layers = MultiDenseLayers(
-            aux_dim, linear_dim, self.activation_f, dropout_rate
+            aux_dim,
+            linear_dim,
+            self.activation_f,
+            self.dropout,
         )
         self.output_layer = nn.Linear(linear_dim[-1], 1)
 
