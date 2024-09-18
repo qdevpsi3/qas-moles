@@ -124,11 +124,45 @@ class MolGAN(LightningModule):
         d_optim.zero_grad()
 
         # train predictor
-        p_loss = self._compute_predictor_loss(batch)
+        p_loss, p_aux = self._compute_predictor_loss(batch)
         self.manual_backward(p_loss)
         p_optim.step()
         p_optim.zero_grad()
 
+        # Log losses to Weights & Biases
+        self.log(
+            "gen_loss",
+            g_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+        self.log(
+            "disc_loss",
+            d_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+        self.log(
+            "pred_loss",
+            p_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+        for key, value in p_aux.items():
+            self.log(
+                key,
+                value,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                logger=True,
+            )
         return {"g_loss": g_loss, "d_loss": d_loss, "p_loss": p_loss}
 
     def _generate_noise(self, batch_size):
@@ -200,8 +234,22 @@ class MolGAN(LightningModule):
         v_fake = torch.from_numpy(v_fake).to(self.device).float()
         p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
         p_loss_fake = nn.HuberLoss()(v_fake, v_pred_fake)
+        p_loss_real_per_metric = {
+            metric: nn.HuberLoss()(v_real, torch.from_numpy(v).to(self.device).float())
+            for metric, v in metrics_real.items()
+        }
+        p_loss_fake_per_metric = {
+            metric: nn.HuberLoss()(v_fake, torch.from_numpy(v).to(self.device).float())
+            for metric, v in metrics_fake.items()
+        }
+        aux = {
+            metric + "/real": loss for metric, loss in p_loss_real_per_metric.items()
+        }
+        aux.update(
+            {metric + "/fake": loss for metric, loss in p_loss_fake_per_metric.items()}
+        )
         p_loss = p_loss_real + p_loss_fake
-        return p_loss
+        return p_loss, aux
 
     def _convert_to_molecules(self, a, x):
         a, x = torch.max(a, -1)[1], torch.max(x, -1)[1]
