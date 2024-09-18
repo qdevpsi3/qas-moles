@@ -45,6 +45,12 @@ def parse_args():
         default="soft_gumbel",
         help="Method to process the output probabilities ('soft_gumbel', 'hard_gumbel')",
     )
+    parser.add_argument(
+        "--agg_method",
+        type=str,
+        default="prod",
+        help="Aggregation method for the rewards.",
+    )
     parser.add_argument("--accelerator", type=str, default="cpu", help="Device to use")
     return parser.parse_args()
 
@@ -72,6 +78,7 @@ def main():
         optimizer=partial(Adam, lr=args.learning_rate),
         grad_penalty=args.grad_penalty,
         process_method=args.process_method,
+        agg_method=args.agg_method,
     )
     # Setup the trainer with MLFlow logging
     mlflow_logger = MLFlowLogger(experiment_name="molgan")

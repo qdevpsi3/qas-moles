@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 from lightning import LightningModule
@@ -58,7 +59,7 @@ class MolGAN(LightningModule):
         *,
         grad_penalty=10.0,
         process_method="soft_gumbel",
-        agg_method="sum",
+        agg_method="prod",
         metrics=None,
     ):
         super().__init__()
@@ -193,6 +194,17 @@ class MolGAN(LightningModule):
     def _apply_predictor(self, a, x):
         return torch.sigmoid(self.predictor(a, None, x)[0])
 
+    def _aggregate_metrics(self, metrics):
+        values = np.stack(
+            [v for metric, v in metrics.items() if metric in self.metrics], axis=-1
+        )
+        if self.hparams.agg_method == "prod":
+            return np.prod(values, axis=-1)
+        elif self.hparams.agg_method == "mean":
+            return np.mean(values, axis=-1)
+        else:
+            raise ValueError(f"Unknown aggregation method: {self.hparams.agg_method}")
+
     def _compute_discriminator_loss(self, batch):
         a_real, x_real = batch.features["A"], batch.features["X"]
         a_real, x_real = self._process_real_data(a_real, x_real)
@@ -228,16 +240,12 @@ class MolGAN(LightningModule):
         a_real, x_real = batch.features["A"], batch.features["X"]
         a_real, x_real = self._process_real_data(a_real, x_real)
         metrics_real = self._compute_metrics(a_real, x_real)
-        v_real = sum(
-            v for metric, v in metrics_real.items() if metric in self.metrics
-        ) / len(self.metrics)
+        v_real = self._aggregate_metrics(metrics_real)
         a_fake, x_fake = self._generate_fake_data(batch)
         a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
         v_fake = self._apply_predictor(a_fake, x_fake)
         metrics_fake = self._compute_metrics(a_fake, x_fake)
-        v_fake = sum(
-            v for metric, v in metrics_fake.items() if metric in self.metrics
-        ) / len(self.metrics)
+        v_fake = self._aggregate_metrics(metrics_fake)
         v_pred_real = self._apply_predictor(a_real, x_real)[..., 0]
         v_pred_fake = self._apply_predictor(a_fake, x_fake)[..., 0]
         v_real = torch.from_numpy(v_real).to(self.device).float()
