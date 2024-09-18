@@ -280,7 +280,7 @@ class MolGAN(LightningModule):
         return metrics
 
     def get_m_dim(self):
-        return self.generator.nodes
+        return self.dataset.atom_num_types
 
     def get_b_dim(self):
-        return self.generator.edges
+        return self.dataset.bond_num_types
