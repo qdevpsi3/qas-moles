@@ -8,12 +8,8 @@ from rdkit import Chem, RDLogger
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
 
-# Set DEBUG to False for production environment where detailed logging is not required
-DEBUG = False
-
-# Disable RDKit logging when not in debug mode
-if not DEBUG:
-    RDLogger.DisableLog("rdApp.error")
+# Disable RDKit logging
+RDLogger.DisableLog("rdApp.error")
 
 
 def extract_molecules_from_file(filename):
@@ -377,13 +373,3 @@ class MolecularDataModule(LightningDataModule):
             batch_size=self.hparams.batch_size,
             collate_fn=collate_fn,
         )
-
-
-if __name__ == "__main__":
-    print("Extracting molecules from the dataset file ...")
-    mols = extract_molecules_from_file("./data/gdb9.sdf")
-    mols = process_molecules(mols, add_h=False, max_atoms=9)
-    mols, features = extact_features(mols, max_length=9)
-    smiles = extract_smiles(mols)
-    dataset = MolecularDataset(mols, smiles, features)
-    dataset.save("./data/gdb9_molecular_dataset.pkl")
