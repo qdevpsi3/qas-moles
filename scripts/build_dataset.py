@@ -1,7 +1,3 @@
-#!/usr/bin/env python
-
-# build_dataset.py
-
 import argparse
 import os
 import sys
@@ -11,7 +7,6 @@ from rdkit import RDLogger
 # Add the source directory to the Python path
 sys.path.append("..")
 
-# Import your module
 from source.datasets import (
     MolecularDataset,
     extact_features,
@@ -22,7 +17,6 @@ from source.datasets import (
 
 
 def main():
-    # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Build and save MolecularDataset")
     parser.add_argument(
         "--input", type=str, required=True, help="Input file (SDF or SMILES)"
@@ -38,7 +32,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # Ensure the output directory exists
     output_dir = os.path.dirname(args.output)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
