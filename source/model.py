@@ -56,11 +56,11 @@ class MolGAN(LightningModule):
         discriminator,
         predictor,
         optimizer,
+        metrics=None,
         *,
         grad_penalty=10.0,
         process_method="soft_gumbel",
         agg_method="prod",
-        metrics=None,
     ):
         super().__init__()
         self.automatic_optimization = False  # Disable automatic optimization

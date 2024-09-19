@@ -1,9 +1,61 @@
+import random
+
+import numpy as np
+import pennylane as qml
 import torch
 import torch.nn as nn
+from torch import nn
 from torchvision.ops import MLP
 
 from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
-from .quantum import NoiseQuantumGenerator, PatchQuantumGenerator
+
+
+class QuantumNoise(nn.Module):
+    def __init__(self, num_qubits: int = 8, num_layers: int = 3):
+        super(QuantumNoise, self).__init__()
+
+        # Register the parameters with the module
+        self.num_qubits = num_qubits
+        self.num_layers = num_layers
+
+        # Initialize weights with PyTorch (between -pi and pi) and register as a learnable parameter
+        self.weights = nn.Parameter(
+            torch.rand(num_layers * (num_qubits * 2 - 1)) * 2 * torch.pi - torch.pi
+        )
+
+        # Initialize the device
+        dev = qml.device("default.qubit", wires=num_qubits)
+
+        # Define the quantum circuit
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
+        def gen_circuit(w):
+            # random noise as generator input
+            z1 = random.uniform(-1, 1)
+            z2 = random.uniform(-1, 1)
+            # construct generator circuit for both atom vector and node matrix
+            for i in range(num_qubits):
+                qml.RY(np.arcsin(z1), wires=i)
+                qml.RZ(np.arcsin(z2), wires=i)
+            for l in range(num_layers):
+                for i in range(num_qubits):
+                    qml.RY(w[i], wires=i)
+                for i in range(num_qubits - 1):
+                    qml.CNOT(wires=[i, i + 1])
+                    qml.RZ(w[i + num_qubits], wires=i + 1)
+                    qml.CNOT(wires=[i, i + 1])
+            return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
+
+        self.gen_circuit = gen_circuit
+
+    def forward(self, batch_size: int):
+        sample_list = [
+            torch.concat(
+                [tensor.unsqueeze(0) for tensor in self.gen_circuit(self.weights)]
+            )
+            for _ in range(batch_size)
+        ]
+        noise = torch.stack(tuple(sample_list)).float()
+        return noise
 
 
 class Generator(nn.Module):
@@ -59,30 +111,27 @@ class Generator(nn.Module):
         return edges_logits, nodes_logits
 
 
-class QuantumGenerator(nn.Module):
+class QuantumGenerator(Generator):
+    """Quantum Generator network of MolGAN"""
+
     def __init__(
         self,
         dataset,
         *,
-        noise_num_qubits=8,
-        noise_depth=3,
-        patch_num_generators=45,
+        conv_dims=[128, 256, 512],
+        z_dim=8,
+        dropout=0.0,
     ):
-        super(QuantumGenerator, self).__init__()
-        self.dataset = dataset
-
-        self.noise_num_qubits = noise_num_qubits
-        self.noise_depth = noise_depth
-        self.patch_num_generators = patch_num_generators
-
-        self.noise_generator = NoiseQuantumGenerator(
-            self.noise_num_qubits, self.noise_depth
+        super(QuantumGenerator, self).__init__(
+            dataset,
+            conv_dims=conv_dims,
+            z_dim=z_dim,
+            dropout=dropout,
         )
-        self.patch_generator = PatchQuantumGenerator(self.patch_num_generators)
+        self.noise_generator = QuantumNoise(z_dim, 3)
 
-    def forward(self, batch_size):
-        noise = self.noise_generator(batch_size)
-        return self.patch_generator(noise)
+    def _generate_z(self, batch_size):
+        return self.noise_generator(batch_size)
 
 
 class Discriminator(nn.Module):
