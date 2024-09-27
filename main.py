@@ -3,7 +3,7 @@ from functools import partial
 
 from lightning import Trainer
 from lightning.pytorch.loggers import MLFlowLogger
-from torch.optim import Adam
+from torch import optim
 
 from source.data import MolecularDataModule, MolecularDataset
 from source.model import MolGAN
@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=0.0001,
+        default=0.001,
         help="Learning rate for the optimizer",
     )
     parser.add_argument(
@@ -51,7 +51,12 @@ def parse_args():
         default="prod",
         help="Aggregation method for the rewards.",
     )
-    parser.add_argument("--accelerator", type=str, default="cpu", help="Device to use")
+    parser.add_argument(
+        "--accelerator",
+        type=str,
+        default="cpu",
+        help="Device to use",
+    )
     return parser.parse_args()
 
 
@@ -65,6 +70,8 @@ def main():
 
     # Initialize nets
     G = Generator(dataset)
+    # G = QuantumGenerator(dataset, noise_generator="molgan")
+    # G = QuantumGenerator(dataset, noise_generator="shadow")
     D = Discriminator(dataset)
     V = Discriminator(dataset)
     print(" Nets created")
@@ -75,7 +82,7 @@ def main():
         G,
         D,
         V,
-        optimizer=partial(Adam, lr=args.learning_rate),
+        optimizer=partial(optim.RMSprop, lr=args.learning_rate),
         grad_penalty=args.grad_penalty,
         process_method=args.process_method,
         agg_method=args.agg_method,

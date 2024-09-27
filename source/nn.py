@@ -10,9 +10,9 @@ from torchvision.ops import MLP
 from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
 
 
-class QuantumNoise(nn.Module):
+class QuantumMolGanNoise(nn.Module):
     def __init__(self, num_qubits: int = 8, num_layers: int = 3):
-        super(QuantumNoise, self).__init__()
+        super(QuantumMolGanNoise, self).__init__()
 
         # Register the parameters with the module
         self.num_qubits = num_qubits
@@ -20,7 +20,7 @@ class QuantumNoise(nn.Module):
 
         # Initialize weights with PyTorch (between -pi and pi) and register as a learnable parameter
         self.weights = nn.Parameter(
-            torch.rand(num_layers * (num_qubits * 2 - 1)) * 2 * torch.pi - torch.pi
+            torch.rand(num_layers, (num_qubits * 2 - 1)) * 2 * torch.pi - torch.pi
         )
 
         # Initialize the device
@@ -38,10 +38,10 @@ class QuantumNoise(nn.Module):
                 qml.RZ(np.arcsin(z2), wires=i)
             for l in range(num_layers):
                 for i in range(num_qubits):
-                    qml.RY(w[i], wires=i)
+                    qml.RY(w[l][i], wires=i)
                 for i in range(num_qubits - 1):
                     qml.CNOT(wires=[i, i + 1])
-                    qml.RZ(w[i + num_qubits], wires=i + 1)
+                    qml.RZ(w[l][i + num_qubits], wires=i + 1)
                     qml.CNOT(wires=[i, i + 1])
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
@@ -55,6 +55,75 @@ class QuantumNoise(nn.Module):
             for _ in range(batch_size)
         ]
         noise = torch.stack(tuple(sample_list)).float()
+        return noise
+
+
+class QuantumShadowNoise(nn.Module):
+    @staticmethod
+    def build_qnode(num_qubits, num_layers, num_basis):
+
+        paulis = [qml.PauliZ, qml.PauliX, qml.PauliY, qml.Identity]
+        basis = [
+            qml.operation.Tensor(*[random.choice(paulis)(i) for i in range(num_qubits)])
+            for _ in range(num_basis)
+        ]
+
+        dev = qml.device("default.qubit", wires=num_qubits, shots=300)
+
+        @qml.qnode(dev, interface="torch", diff_method="best")
+        def gen_circuit(w):
+            z1 = random.uniform(-1, 1)
+            z2 = random.uniform(-1, 1)
+            # construct generator circuit for both atom vector and node matrix
+            for i in range(num_qubits):
+                qml.RY(np.arcsin(z1), wires=i)
+                qml.RZ(np.arcsin(z2), wires=i)
+            for l in range(num_layers):
+                for i in range(num_qubits):
+                    qml.RY(w[l][i], wires=i)
+                for i in range(num_qubits - 1):
+                    qml.CNOT(wires=[i, i + 1])
+                    qml.RZ(w[l][i + num_qubits], wires=i + 1)
+                    qml.CNOT(wires=[i, i + 1])
+            return qml.shadow_expval(basis)
+
+        return basis, gen_circuit
+
+    def __init__(
+        self,
+        z_dim: int,
+        *,
+        num_qubits: int = 8,
+        num_layers: int = 3,
+        num_basis: int = 3,
+    ):
+        super(QuantumShadowNoise, self).__init__()
+
+        # Register the parameters with the module
+        self.z_dim = z_dim
+        self.num_qubits = num_qubits
+        self.num_layers = num_layers
+        self.num_basis = num_basis
+
+        self.basis, self.gen_circuit = self.build_qnode(
+            num_qubits, num_layers, num_basis
+        )
+
+        # Initialize weights with PyTorch (between -pi and pi) and register as a learnable parameter
+        self.weights = nn.Parameter(
+            torch.rand(num_layers, (num_qubits * 2 - 1)) * 2 * torch.pi - torch.pi
+        )
+        self.coeffs = nn.Parameter(torch.rand(num_basis, self.z_dim))
+
+    def forward(self, batch_size: int):
+        sample_list = [
+            torch.cat(
+                [tensor.unsqueeze(0) for tensor in self.gen_circuit(self.weights)]
+            )
+            for _ in range(batch_size)
+        ]
+        noise = torch.stack(tuple(sample_list)).float()
+        noise = torch.matmul(noise, self.coeffs)
         return noise
 
 
@@ -121,6 +190,7 @@ class QuantumGenerator(Generator):
         conv_dims=[128, 256, 512],
         z_dim=8,
         dropout=0.0,
+        noise_generator="molgan",
     ):
         super(QuantumGenerator, self).__init__(
             dataset,
@@ -128,7 +198,10 @@ class QuantumGenerator(Generator):
             z_dim=z_dim,
             dropout=dropout,
         )
-        self.noise_generator = QuantumNoise(z_dim, 3)
+        if noise_generator == "molgan":
+            self.noise_generator = QuantumShadowNoise(z_dim)
+        elif noise_generator == "shadow":
+            self.noise_generator = QuantumShadowNoise(z_dim)
 
     def _generate_z(self, batch_size):
         return self.noise_generator(batch_size)
