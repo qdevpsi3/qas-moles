@@ -190,7 +190,7 @@ class QuantumGenerator(Generator):
         conv_dims=[128, 256, 512],
         z_dim=8,
         dropout=0.0,
-        noise_generator="molgan",
+        use_shadows=False,
     ):
         super(QuantumGenerator, self).__init__(
             dataset,
@@ -198,10 +198,10 @@ class QuantumGenerator(Generator):
             z_dim=z_dim,
             dropout=dropout,
         )
-        if noise_generator == "molgan":
+        if use_shadows:
             self.noise_generator = QuantumShadowNoise(z_dim)
-        elif noise_generator == "shadow":
-            self.noise_generator = QuantumShadowNoise(z_dim)
+        else:
+            self.noise_generator = QuantumMolGanNoise(z_dim)
 
     def _generate_z(self, batch_size):
         return self.noise_generator(batch_size)
