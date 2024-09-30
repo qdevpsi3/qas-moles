@@ -1,7 +1,10 @@
 import argparse
+from datetime import datetime
 from functools import partial
 
+import mlflow
 from lightning import Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
 from torch import optim
 
@@ -16,6 +19,30 @@ def parse_args():
         description="Train the MolGAN model on the gdb9 dataset"
     )
     parser.add_argument(
+        "--stage",
+        type=str,
+        default="train",
+        help="Stage to run ('train', 'test')",
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Path to the checkpoint file",
+    )
+    parser.add_argument(
+        "--generator_type",
+        type=str,
+        default="classical",
+        help="Type of generator to use ('classical', 'quantum')",
+    )
+    parser.add_argument(
+        "--use_shadows",
+        type=bool,
+        default=False,  # or shadow
+        help="Use shadow noise generator for the quantum generator",
+    )
+    parser.add_argument(
         "--data_path",
         type=str,
         default="./data/gdb9_molecular_dataset_small.pkl",
@@ -25,7 +52,10 @@ def parse_args():
         "--batch_size", type=int, default=32, help="Batch size for training"
     )
     parser.add_argument(
-        "--max_epochs", type=int, default=10, help="Maximum number of epochs to train"
+        "--max_epochs",
+        type=int,
+        default=5,
+        help="Maximum number of epochs to train",
     )
     parser.add_argument(
         "--learning_rate",
@@ -63,18 +93,22 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Enable MLflow autologging
+    mlflow.pytorch.autolog(checkpoint_save_best_only=False)
+
     # Load data module
     dataset = MolecularDataset.load(args.data_path)
     datamodule = MolecularDataModule(dataset, batch_size=args.batch_size)
     datamodule.setup()
 
-    # Initialize nets
-    G = Generator(dataset)
-    # G = QuantumGenerator(dataset, noise_generator="molgan")
-    # G = QuantumGenerator(dataset, noise_generator="shadow")
+    # Initialize networks
+    if args.generator_type == "classical":
+        G = Generator(dataset)
+    elif args.generator_type == "quantum":
+        G = QuantumGenerator(dataset, use_shadows=args.use_shadows)
     D = Discriminator(dataset)
     V = Discriminator(dataset)
-    print(" Nets created")
+    print("Nets created")
 
     # Setup the MolGAN model
     model = MolGAN(
@@ -87,17 +121,49 @@ def main():
         process_method=args.process_method,
         agg_method=args.agg_method,
     )
-    # Setup the trainer with MLFlow logging
+    if args.checkpoint_path is not None:
+        # Load the best model
+        model = MolGAN.load_from_checkpoint(
+            "checkpoints/" + args.checkpoint_path + ".ckpt",
+            dataset=dataset,
+            generator=G,
+            discriminator=D,
+            predictor=V,
+            optimizer=partial(optim.RMSprop, lr=args.learning_rate),
+        )
+    # Define the checkpoint callback
+    current_date_time = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if args.generator_type == "classical":
+        filename = f"best-checkpoint-classical-{current_date_time}"
+    elif args.use_shadows:
+        filename = f"best-checkpoint-quantum-shadows-{current_date_time}"
+    else:
+        filename = f"best-checkpoint-quantum-no-shadows-{current_date_time}"
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_metric",
+        save_top_k=1,
+        mode="max",
+        dirpath="checkpoints/",
+        filename=filename,
+        save_last=True,
+    )
+
+    # Setup the trainer with MLflow logging and checkpoint callback
     mlflow_logger = MLFlowLogger(experiment_name="molgan")
     trainer = Trainer(
         max_epochs=args.max_epochs,
         accelerator=args.accelerator,
         logger=mlflow_logger,
-        log_every_n_steps=10,
+        log_every_n_steps=1,
+        callbacks=[checkpoint_callback],
     )
 
-    # Start training
-    trainer.fit(model=model, datamodule=datamodule)
+    if args.stage == "train":
+        # Start training
+        trainer.fit(model=model, datamodule=datamodule)
+    elif args.stage == "test":
+        # Start testing
+        trainer.test(model=model, datamodule=datamodule)
 
 
 if __name__ == "__main__":
