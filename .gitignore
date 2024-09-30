@@ -160,6 +160,8 @@ cython_debug/
 #.idea/
 
 data/*
-!data/download_data.sh
+!data/.gitkeep
 lightning_logs/*
 mlruns/*
+checkpoints/*
+!checkpoints/.gitkeep
