@@ -2,9 +2,17 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from lightning import LightningModule
+from rdkit import Chem
 from torch import nn
 
 from .metrics import ALL_METRICS
+
+
+def mol_to_smiles(mol):
+    """Convert an RDKit Mol object to a SMILES string."""
+    if mol is None:
+        return None
+    return Chem.MolToSmiles(mol)
 
 
 def label2onehot(labels, dim):
@@ -167,6 +175,100 @@ class MolGAN(LightningModule):
                 batch_size=batch.features["X"].size(0),
             )
         return {"g_loss": g_loss, "d_loss": d_loss, "p_loss": p_loss}
+
+    def validation_step(self, batch, batch_idx):
+        # Similar to test_step but for validation data
+        # Process the real data
+        a_real, x_real = batch.features["A"], batch.features["X"]
+        a_real_onehot, x_real_onehot = self._process_real_data(a_real, x_real)
+
+        # Generate fake data
+        a_fake_logits, x_fake_logits = self._generate_fake_data(batch)
+        a_fake_onehot, x_fake_onehot = self._process_fake_data(
+            a_fake_logits, x_fake_logits
+        )
+
+        # Compute metrics on real data
+        metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
+        avg_metrics_real = {
+            f"val_real_{k}": np.mean(v) for k, v in metrics_real.items()
+        }
+
+        # Compute metrics on generated data
+        metrics_fake = self._compute_metrics(a_fake_onehot, x_fake_onehot)
+        avg_metrics_fake = {
+            f"val_fake_{k}": np.mean(v) for k, v in metrics_fake.items()
+        }
+
+        # Extract SMILES from generated molecules
+        mols_fake = self._convert_to_molecules(a_fake_onehot, x_fake_onehot)
+        smiles_fake = [mol_to_smiles(mol) for mol in mols_fake if mol is not None]
+
+        # Log the metrics
+        self.log_dict(avg_metrics_real, on_epoch=True, prog_bar=True, logger=True)
+        self.log_dict(avg_metrics_fake, on_epoch=True, prog_bar=True, logger=True)
+
+        # Optionally, compute an aggregated validation metric
+        val_metric = np.mean(list(avg_metrics_fake.values()))
+        self.log(
+            "val_metric",
+            val_metric,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
+        return smiles_fake
+
+    def test_step(self, batch, batch_idx):
+        # Process the real data
+        a_real, x_real = batch.features["A"], batch.features["X"]
+        a_real_onehot, x_real_onehot = self._process_real_data(a_real, x_real)
+
+        # Generate fake data
+        a_fake_logits, x_fake_logits = self._generate_fake_data(batch)
+        a_fake_onehot, x_fake_onehot = self._process_fake_data(
+            a_fake_logits, x_fake_logits
+        )
+
+        # Compute metrics on real data
+        metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
+        avg_metrics_real = {
+            f"test_real_{k}": np.mean(v) for k, v in metrics_real.items()
+        }
+
+        # Compute metrics on generated data
+        metrics_fake = self._compute_metrics(a_fake_onehot, x_fake_onehot)
+        avg_metrics_fake = {
+            f"test_fake_{k}": np.mean(v) for k, v in metrics_fake.items()
+        }
+
+        # Extract SMILES from generated molecules
+        mols_fake = self._convert_to_molecules(a_fake_onehot, x_fake_onehot)
+        smiles_fake = [mol_to_smiles(mol) for mol in mols_fake if mol is not None]
+        print(a_fake_onehot)
+        # Print the SMILES strings
+        for smiles in smiles_fake:
+            if smiles:
+                print(smiles)
+
+        # Log the metrics
+        self.log_dict(avg_metrics_real, on_epoch=True, prog_bar=True, logger=True)
+        self.log_dict(avg_metrics_fake, on_epoch=True, prog_bar=True, logger=True)
+
+        # Optionally, compute an aggregated test metric
+        test_metric = np.mean(list(avg_metrics_fake.values()))
+        self.log(
+            "test_metric",
+            test_metric,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
+        return smiles_fake
 
     def _generate_fake_data(self, batch):
         batch_size = batch.features["X"].size(0)
