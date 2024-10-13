@@ -22,7 +22,7 @@ This guide provides instructions on how to train and test the MolGAN model using
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/yourusername/qas-moles.git
+   git clone https://github.com/qdevpsi3/qas-moles.git
    cd qas-moles
    ```
 
