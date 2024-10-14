@@ -18,7 +18,10 @@ def mol_to_smiles(mol):
 def label2onehot(labels, dim):
     """Convert label indices to one-hot vectors"""
     labels = labels.long()
-    out = torch.zeros(list(labels.size()) + [dim])
+    device = labels.device  # Get the device of labels
+    out = torch.zeros(
+        list(labels.size()) + [dim], device=device
+    )  # Ensure out is on the same device
     out.scatter_(len(out.size()) - 1, labels.unsqueeze(-1), 1.0)
     return out
 
@@ -347,16 +350,16 @@ class MolGAN(LightningModule):
         v_fake = self._aggregate_metrics(metrics_fake)
         v_pred_real = self._apply_predictor(a_real, x_real)[..., 0]
         v_pred_fake = self._apply_predictor(a_fake, x_fake)[..., 0]
-        v_real = torch.from_numpy(v_real).to(self.device).float()
-        v_fake = torch.from_numpy(v_fake).to(self.device).float()
+        v_real = torch.from_numpy(v_real).float().to(self.device)
+        v_fake = torch.from_numpy(v_fake).float().to(self.device)
         p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
         p_loss_fake = nn.HuberLoss()(v_fake, v_pred_fake)
         p_loss_real_per_metric = {
-            metric: nn.HuberLoss()(v_real, torch.from_numpy(v).to(self.device).float())
+            metric: nn.HuberLoss()(v_real, torch.from_numpy(v).float().to(self.device))
             for metric, v in metrics_real.items()
         }
         p_loss_fake_per_metric = {
-            metric: nn.HuberLoss()(v_fake, torch.from_numpy(v).to(self.device).float())
+            metric: nn.HuberLoss()(v_fake, torch.from_numpy(v).float().to(self.device))
             for metric, v in metrics_fake.items()
         }
         aux = {

@@ -196,6 +196,7 @@ def extact_features(mols, max_length):
         "Le": data_Le,
         "Lv": data_Lv,
     }
+    features = {k: np.array(v, dtype=np.float32) for k, v in features.items()}
     return valid_mols, features
 
 
@@ -306,7 +307,7 @@ def collate_fn(batch):
         # Stack the arrays from each sample to create a batch tensor
         batched_array = np.stack([features[key] for features in features_list], axis=0)
         # Convert the numpy array to a PyTorch tensor
-        batched_features[key] = torch.tensor(batched_array)
+        batched_features[key] = torch.tensor(batched_array, dtype=torch.float32)
 
     # Return the batched mols, smiles, and features
     samples = MolecularSample(mols, smiles_list, batched_features, is_batched=True)

@@ -32,6 +32,7 @@ class MolecularMetric(Metric):
     def update(self, mols):
         """Updates the metric's state with the provided molecules."""
         scores = self.compute_score(mols)
+        scores = np.array(scores, dtype=np.float32)
         self.score += torch.tensor(scores).sum()
         self.total += len(mols)
 
