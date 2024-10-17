@@ -35,7 +35,7 @@ def main():
     )
     parser.add_argument(
         "--add_h",
-        action="store_true",
+        action="store_false",
         help="Add hydrogens to molecules",
     )
     args = parser.parse_args()
