@@ -250,7 +250,7 @@ class MolGAN(LightningModule):
         # Extract SMILES from generated molecules
         mols_fake = self._convert_to_molecules(a_fake_onehot, x_fake_onehot)
         smiles_fake = [mol_to_smiles(mol) for mol in mols_fake if mol is not None]
-        print(a_fake_onehot)
+
         # Print the SMILES strings
         for smiles in smiles_fake:
             if smiles:
@@ -373,6 +373,248 @@ class MolGAN(LightningModule):
 
     def _convert_to_molecules(self, a, x):
         a, x = torch.max(a, -1)[1], torch.max(x, -1)[1]
+        np_x = x.cpu().numpy()
+        if np.any(np_x == -1):
+            print(x)
+        a, x = a.cpu().numpy(), x.cpu().numpy()
+        mols = [self.dataset.matrices2mol(_x, _a, strict=True) for _a, _x in zip(a, x)]
+        return mols
+
+    def _compute_metrics(self, a, x):
+        mols = self._convert_to_molecules(a, x)
+        metrics = {}
+        for metric in self.metrics:
+            metrics[metric] = ALL_METRICS[metric]().compute_score(mols)
+        return metrics
+
+    def get_m_dim(self):
+        return self.dataset.atom_num_types
+
+    def get_b_dim(self):
+        return self.dataset.bond_num_types
+
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from lightning import LightningModule
+from rdkit import Chem
+from torch import nn
+
+from .metrics import ALL_METRICS
+
+
+def mol_to_smiles(mol):
+    """Convert an RDKit Mol object to a SMILES string."""
+    if mol is None:
+        return None
+    return Chem.MolToSmiles(mol)
+
+
+def label2onehot(labels, dim):
+    """Convert label indices to one-hot vectors"""
+    labels = labels.long()
+    device = labels.device  # Get the device of labels
+    out = torch.zeros(
+        list(labels.size()) + [dim], device=device
+    )  # Ensure out is on the same device
+    out.scatter_(len(out.size()) - 1, labels.unsqueeze(-1), 1.0)
+    return out
+
+
+def postprocess(inputs, method, temperature=1.0):
+    """Convert the probability matrices into label matrices"""
+
+    def listify(x):
+        return x if type(x) == list or type(x) == tuple else [x]
+
+    def delistify(x):
+        return x if len(x) > 1 else x[0]
+
+    if method == "soft_gumbel":
+        softmax = [
+            F.gumbel_softmax(
+                e_logits.contiguous().view(-1, e_logits.size(-1)) / temperature,
+                hard=False,
+            ).view(e_logits.size())
+            for e_logits in listify(inputs)
+        ]
+    elif method == "hard_gumbel":
+        softmax = [
+            F.gumbel_softmax(
+                e_logits.contiguous().view(-1, e_logits.size(-1)) / temperature,
+                hard=True,
+            ).view(e_logits.size())
+            for e_logits in listify(inputs)
+        ]
+    else:
+        softmax = [
+            F.softmax(e_logits / temperature, -1) for e_logits in listify(inputs)
+        ]
+
+    return [delistify(e) for e in (softmax)]
+
+
+class MolPredictor(LightningModule):
+    def __init__(
+        self,
+        dataset,
+        predictor,
+        optimizer,
+        metrics=None,
+    ):
+        super().__init__()
+        if metrics is None:
+            metrics = ["logp", "sas", "qed", "unique"]
+        self.save_hyperparameters(
+            ignore=[
+                "dataset",
+                "generator",
+                "discriminator",
+                "predictor",
+                "optimizer",
+                "metrics",
+            ],
+        )
+        self.dataset = dataset
+        self.predictor = predictor
+        self.optimizer = optimizer
+        self.metrics = metrics
+
+        self.metrics_fn = dict((metric, ALL_METRICS[metric]()) for metric in metrics)
+
+    def configure_optimizers(self):
+        optim = self.optimizer(self.predictor.parameters())
+        return optim
+
+    def training_step(self, batch, batch_idx):
+        # train predictor
+        p_loss, p_aux = self._compute_predictor_loss(batch)
+
+        # Log losses to Weights & Biases
+        self.log(
+            "pred_loss",
+            p_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            batch_size=batch.features["X"].size(0),
+        )
+        for key, value in p_aux.items():
+            self.log(
+                key,
+                value,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                logger=True,
+                batch_size=batch.features["X"].size(0),
+            )
+        return {"p_loss": p_loss}
+
+    def validation_step(self, batch, batch_idx):
+        # Similar to test_step but for validation data
+        # Process the real data
+        a, x = batch.features["A"], batch.features["X"]
+        a_onehot, x_onehot = self._process_real_data(a, x)
+
+        # Compute metrics on real data
+        metrics = self._compute_metrics(a_onehot, x_onehot)
+        avg_metrics = {f"val_{k}": np.mean(v) for k, v in metrics.items()}
+        # Extract SMILES from generated molecules
+        # Log the metrics
+        self.log_dict(avg_metrics, on_epoch=True, prog_bar=True, logger=True)
+        return avg_metrics
+
+    def test_step(self, batch, batch_idx):
+        # Process the real data
+        a_real, x_real = batch.features["A"], batch.features["X"]
+        a_real_onehot, x_real_onehot = self._process_real_data(a_real, x_real)
+
+        # Generate fake data
+        a_fake_logits, x_fake_logits = self._generate_fake_data(batch)
+        a_fake_onehot, x_fake_onehot = self._process_fake_data(
+            a_fake_logits, x_fake_logits
+        )
+
+        # Compute metrics on real data
+        metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
+        avg_metrics_real = {
+            f"test_real_{k}": np.mean(v) for k, v in metrics_real.items()
+        }
+
+        # Compute metrics on generated data
+        metrics_fake = self._compute_metrics(a_fake_onehot, x_fake_onehot)
+        avg_metrics_fake = {
+            f"test_fake_{k}": np.mean(v) for k, v in metrics_fake.items()
+        }
+
+        # Extract SMILES from generated molecules
+        mols_fake = self._convert_to_molecules(a_fake_onehot, x_fake_onehot)
+        smiles_fake = [mol_to_smiles(mol) for mol in mols_fake if mol is not None]
+
+        # Print the SMILES strings
+        for smiles in smiles_fake:
+            if smiles:
+                print(smiles)
+
+        # Log the metrics
+        self.log_dict(avg_metrics_real, on_epoch=True, prog_bar=True, logger=True)
+        self.log_dict(avg_metrics_fake, on_epoch=True, prog_bar=True, logger=True)
+
+        # Optionally, compute an aggregated test metric
+        test_metric = np.mean(list(avg_metrics_fake.values()))
+        self.log(
+            "test_metric",
+            test_metric,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
+        return smiles_fake
+
+    def _process_real_data(self, a_real, x_real):
+        a_real = label2onehot(a_real, self.get_b_dim())
+        x_real = label2onehot(x_real, self.get_m_dim())
+        return a_real, x_real
+
+    def _apply_predictor(self, a, x):
+        return torch.sigmoid(self.predictor(a, None, x)[0])
+
+    def _aggregate_metrics(self, metrics):
+        values = np.stack(
+            [v for metric, v in metrics.items() if metric in self.metrics], axis=-1
+        )
+        if self.hparams.agg_method == "prod":
+            return np.prod(values, axis=-1)
+        elif self.hparams.agg_method == "mean":
+            return np.mean(values, axis=-1)
+        else:
+            raise ValueError(f"Unknown aggregation method: {self.hparams.agg_method}")
+
+    def _compute_predictor_loss(self, batch):
+        a, x = batch.features["A"], batch.features["X"]
+        a, x = self._process_real_data(a, x)
+        metrics = self._compute_metrics(a, x)
+        v = self._aggregate_metrics(metrics)
+        v_pred = self._apply_predictor(a, x)[..., 0]
+        v = torch.from_numpy(v).float().to(self.device)
+        p_loss = nn.HuberLoss()(v, v_pred)
+        p_loss_per_metric = {
+            metric: nn.HuberLoss()(v, torch.from_numpy(v).float().to(self.device))
+            for metric, v in metrics.items()
+        }
+        aux = {metric: loss for metric, loss in p_loss_per_metric.items()}
+        return p_loss, aux
+
+    def _convert_to_molecules(self, a, x):
+        a, x = torch.max(a, -1)[1], torch.max(x, -1)[1]
+        np_x = x.cpu().numpy()
+        if np.any(np_x == -1):
+            print(x)
         a, x = a.cpu().numpy(), x.cpu().numpy()
         mols = [self.dataset.matrices2mol(_x, _a, strict=True) for _a, _x in zip(a, x)]
         return mols
