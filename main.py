@@ -6,7 +6,8 @@ import mlflow
 from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
-from torch import optim
+import torch
+
 
 from source.data import MolecularDataModule, MolecularDataset
 from source.model import MolGAN
@@ -92,6 +93,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    device = torch.device("cuda" if args.accelerator == "gpu" and torch.cuda.is_available() else "cpu")
 
     # Enable MLflow autologging
     mlflow.pytorch.autolog(checkpoint_save_best_only=False)
@@ -108,6 +110,9 @@ def main():
         G = QuantumGenerator(dataset, use_shadows=args.use_shadows)
     D = Discriminator(dataset)
     V = Discriminator(dataset)
+    G.to(device)
+    D.to(device)
+    V.to(device)
     print("Nets created")
 
     # Setup the MolGAN model
@@ -116,11 +121,12 @@ def main():
         G,
         D,
         V,
-        optimizer=partial(optim.RMSprop, lr=args.learning_rate),
+        optimizer=partial(torch.optim.RMSprop, lr=args.learning_rate),
         grad_penalty=args.grad_penalty,
         process_method=args.process_method,
         agg_method=args.agg_method,
     )
+    model.to(device)
     if args.checkpoint_path is not None:
         # Load the best model
         model = MolGAN.load_from_checkpoint(
@@ -129,8 +135,9 @@ def main():
             generator=G,
             discriminator=D,
             predictor=V,
-            optimizer=partial(optim.RMSprop, lr=args.learning_rate),
+            optimizer=partial(torch.optim.RMSprop, lr=args.learning_rate),
         )
+        model.to(device)
     # Define the checkpoint callback
     current_date_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     if args.generator_type == "classical":

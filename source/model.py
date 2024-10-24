@@ -15,14 +15,6 @@ def mol_to_smiles(mol):
     return Chem.MolToSmiles(mol)
 
 
-def label2onehot(labels, dim):
-    """Convert label indices to one-hot vectors"""
-    labels = labels.long()
-    out = torch.zeros(list(labels.size()) + [dim])
-    out.scatter_(len(out.size()) - 1, labels.unsqueeze(-1), 1.0)
-    return out
-
-
 def postprocess(inputs, method, temperature=1.0):
     """Convert the probability matrices into label matrices"""
 
@@ -98,6 +90,14 @@ class MolGAN(LightningModule):
         d_optim = self.optimizer(self.discriminator.parameters())
         p_optim = self.optimizer(self.predictor.parameters())
         return [g_optim, d_optim, p_optim], []
+    
+
+    def label2onehot(self, labels, dim):
+        """Convert label indices to one-hot vectors."""
+        labels = labels.long().to(self.device)
+        out = torch.zeros(list(labels.size()) + [dim], device=self.device)
+        out.scatter_(len(out.size()) - 1, labels.unsqueeze(-1), 1.0)
+        return out
 
     def _calculate_gradient_penalty(self, y, x):
         """Compute gradient penalty: (L2_norm(dy/dx) - 1)**2."""
@@ -179,7 +179,7 @@ class MolGAN(LightningModule):
     def validation_step(self, batch, batch_idx):
         # Similar to test_step but for validation data
         # Process the real data
-        a_real, x_real = batch.features["A"], batch.features["X"]
+        a_real, x_real = batch.features["A"].to(self.device), batch.features["X"].to(self.device)
         a_real_onehot, x_real_onehot = self._process_real_data(a_real, x_real)
 
         # Generate fake data
@@ -273,11 +273,12 @@ class MolGAN(LightningModule):
     def _generate_fake_data(self, batch):
         batch_size = batch.features["X"].size(0)
         a_fake, x_fake = self.generator(batch_size)
+        a_fake, x_fake = a_fake.to(self.device), x_fake.to(self.device) 
         return a_fake, x_fake
 
     def _process_real_data(self, a_real, x_real):
-        a_real = label2onehot(a_real, self.get_b_dim())
-        x_real = label2onehot(x_real, self.get_m_dim())
+        a_real = self.label2onehot(a_real, self.get_b_dim())
+        x_real = self.label2onehot(x_real, self.get_m_dim())
         return a_real, x_real
 
     def _process_fake_data(self, a_fake, x_fake):
