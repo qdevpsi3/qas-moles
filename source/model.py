@@ -339,14 +339,13 @@ class MolGAN(LightningModule):
     def _compute_predictor_loss(self, batch):
         a_real, x_real = batch.features["A"], batch.features["X"]
         a_real, x_real = self._process_real_data(a_real, x_real)
-        metrics_real = self._compute_metrics(a_real, x_real)
+        metrics_real = batch.metrics
         v_real = self._aggregate_metrics(metrics_real)
         v_pred_real = self._apply_predictor(a_real, x_real)[..., 0]
         v_real = torch.from_numpy(v_real).to(self.device).float()
         p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
         p_loss_real_per_metric = {
-            metric: nn.HuberLoss()(v_real, torch.from_numpy(v).to(self.device).float())
-            for metric, v in metrics_real.items()
+            metric: nn.HuberLoss()(v_real, v) for metric, v in metrics_real.items()
         }
         aux = {
             metric + "/real": loss for metric, loss in p_loss_real_per_metric.items()
