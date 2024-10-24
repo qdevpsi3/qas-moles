@@ -161,7 +161,7 @@ class Generator(nn.Module):
         self.dropout_layer = nn.Dropout(self.dropout)
 
     def _generate_z(self, batch_size):
-        return torch.rand(batch_size, self.z_dim)
+        return torch.rand(batch_size, self.z_dim).to(next(self.parameters()).device)
 
     def forward(self, batch_size):
         z = self._generate_z(batch_size)
