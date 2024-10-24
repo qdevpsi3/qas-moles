@@ -35,7 +35,8 @@ def main():
     )
     parser.add_argument(
         "--add_h",
-        action="store_false",
+        type=bool,
+        default=False,
         help="Add hydrogens to molecules",
     )
     args = parser.parse_args()
@@ -48,12 +49,18 @@ def main():
     RDLogger.DisableLog("rdApp.error")
 
     mols = extract_molecules_from_file(args.input)
+    print(f"Extracted {len(mols)} molecules from {args.input}")
     if args.max_mols is not None:
         mols = mols[: args.max_mols]
     mols = process_molecules(mols, add_h=args.add_h, max_atoms=args.max_atoms)
     mols, features = extact_features(mols, max_length=args.max_atoms)
     smiles = extract_smiles(mols)
-    dataset = MolecularDataset(mols, smiles, features)
+    dataset = MolecularDataset(
+        mols,
+        smiles,
+        features,
+        metrics=["logp", "qed", "np", "sas"],
+    )
     dataset.save(args.output)
 
 
