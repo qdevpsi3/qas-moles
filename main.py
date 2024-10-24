@@ -3,11 +3,10 @@ from datetime import datetime
 from functools import partial
 
 import mlflow
+import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
-import torch
-
 
 from source.data import MolecularDataModule, MolecularDataset
 from source.model import MolGAN
@@ -46,11 +45,14 @@ def parse_args():
     parser.add_argument(
         "--data_path",
         type=str,
-        default="./data/gdb9_molecular_dataset_small.pkl",
+        default="./data/gdb9_molecular_dataset.pkl",
         help="Path to the molecular dataset file",
     )
     parser.add_argument(
-        "--batch_size", type=int, default=32, help="Batch size for training"
+        "--batch_size",
+        type=int,
+        default=32,
+        help="Batch size for training",
     )
     parser.add_argument(
         "--max_epochs",
@@ -83,6 +85,18 @@ def parse_args():
         help="Aggregation method for the rewards.",
     )
     parser.add_argument(
+        "--train_predictor_on_fake",
+        type=bool,
+        default=False,
+        help="Train the predictor on fake samples",
+    )
+    parser.add_argument(
+        "--n_critic",
+        type=int,
+        default=5,
+        help="Number of discriminator updates per generator update",
+    )
+    parser.add_argument(
         "--accelerator",
         type=str,
         default="cpu",
@@ -93,7 +107,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    device = torch.device("cuda" if args.accelerator == "gpu" and torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if args.accelerator == "gpu" and torch.cuda.is_available() else "cpu"
+    )
 
     # Enable MLflow autologging
     mlflow.pytorch.autolog(checkpoint_save_best_only=False)
@@ -125,6 +141,8 @@ def main():
         grad_penalty=args.grad_penalty,
         process_method=args.process_method,
         agg_method=args.agg_method,
+        train_predictor_on_fake=args.train_predictor_on_fake,
+        n_critic=args.n_critic,
     )
     model.to(device)
     if args.checkpoint_path is not None:
