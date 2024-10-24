@@ -134,7 +134,7 @@ class Generator(nn.Module):
         self,
         dataset,
         *,
-        conv_dims=[128, 256, 512],
+        conv_dims=[128, 256],
         z_dim=8,
         dropout=0.0,
     ):
@@ -165,6 +165,7 @@ class Generator(nn.Module):
 
     def forward(self, batch_size):
         z = self._generate_z(batch_size)
+        z = z.to(next(self.parameters()).device)
         output = self.multi_dense_layers(z)
         edges_logits = self.edges_layer(output).view(
             -1, self.edges, self.vertexes, self.vertexes
@@ -187,7 +188,7 @@ class QuantumGenerator(Generator):
         self,
         dataset,
         *,
-        conv_dims=[128, 256, 512],
+        conv_dims=[128, 256],
         z_dim=8,
         dropout=0.0,
         use_shadows=False,
