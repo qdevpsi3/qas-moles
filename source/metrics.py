@@ -102,7 +102,7 @@ class WOPCScore(MolecularMetric):
     _molgan_label = "logp"
     _molgan_func = "water_octanol_partition_coefficient"
 
-    def __init__(self, norm=False, dist_sync_on_step=False):
+    def __init__(self, norm=True, dist_sync_on_step=False):
         super().__init__(dist_sync_on_step=dist_sync_on_step)
         self.norm = norm
 

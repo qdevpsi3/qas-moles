@@ -56,16 +56,15 @@ class MolGAN(LightningModule):
         discriminator,
         predictor,
         optimizer,
-        metrics=None,
         *,
+        n_critic=5,
         grad_penalty=10.0,
         process_method="soft_gumbel",
         agg_method="prod",
+        train_predictor_on_fake=False,
     ):
         super().__init__()
         self.automatic_optimization = False  # Disable automatic optimization
-        if metrics is None:
-            metrics = ["logp", "sas", "qed", "unique"]
         self.save_hyperparameters(
             ignore=[
                 "dataset",
@@ -81,16 +80,17 @@ class MolGAN(LightningModule):
         self.discriminator = discriminator
         self.predictor = predictor
         self.optimizer = optimizer
-        self.metrics = metrics
+        self.metrics = self.dataset.metrics
 
-        self.metrics_fn = dict((metric, ALL_METRICS[metric]()) for metric in metrics)
+        self.metrics_fn = dict(
+            (metric, ALL_METRICS[metric]()) for metric in self.metrics
+        )
 
     def configure_optimizers(self):
         g_optim = self.optimizer(self.generator.parameters())
         d_optim = self.optimizer(self.discriminator.parameters())
         p_optim = self.optimizer(self.predictor.parameters())
         return [g_optim, d_optim, p_optim], []
-    
 
     def label2onehot(self, labels, dim):
         """Convert label indices to one-hot vectors."""
@@ -118,34 +118,11 @@ class MolGAN(LightningModule):
         # Access the optimizers
         g_optim, d_optim, p_optim = self.optimizers()
 
-        # train generator
-        g_loss = self._compute_generator_loss(batch)
-        self.manual_backward(g_loss)
-        g_optim.step()
-        g_optim.zero_grad()
-
         # train discriminator
         d_loss = self._compute_discriminator_loss(batch)
         self.manual_backward(d_loss)
         d_optim.step()
         d_optim.zero_grad()
-
-        # train predictor
-        p_loss, p_aux = self._compute_predictor_loss(batch)
-        self.manual_backward(p_loss)
-        p_optim.step()
-        p_optim.zero_grad()
-
-        # Log losses to Weights & Biases
-        self.log(
-            "gen_loss",
-            g_loss,
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-            batch_size=batch.features["X"].size(0),
-        )
         self.log(
             "disc_loss",
             d_loss,
@@ -155,6 +132,12 @@ class MolGAN(LightningModule):
             logger=True,
             batch_size=batch.features["X"].size(0),
         )
+
+        # train predictor
+        p_loss, p_aux = self._compute_predictor_loss(batch)
+        self.manual_backward(p_loss)
+        p_optim.step()
+        p_optim.zero_grad()
         self.log(
             "pred_loss",
             p_loss,
@@ -174,12 +157,29 @@ class MolGAN(LightningModule):
                 logger=True,
                 batch_size=batch.features["X"].size(0),
             )
-        return {"g_loss": g_loss, "d_loss": d_loss, "p_loss": p_loss}
+
+        if (batch_idx % self.hparams.n_critic) == 0:
+            # train generator
+            g_loss = self._compute_generator_loss(batch)
+            self.manual_backward(g_loss)
+            g_optim.step()
+            g_optim.zero_grad()
+            self.log(
+                "gen_loss",
+                g_loss,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                logger=True,
+                batch_size=batch.features["X"].size(0),
+            )
 
     def validation_step(self, batch, batch_idx):
         # Similar to test_step but for validation data
         # Process the real data
-        a_real, x_real = batch.features["A"].to(self.device), batch.features["X"].to(self.device)
+        a_real, x_real = batch.features["A"].to(self.device), batch.features["X"].to(
+            self.device
+        )
         a_real_onehot, x_real_onehot = self._process_real_data(a_real, x_real)
 
         # Generate fake data
@@ -247,7 +247,7 @@ class MolGAN(LightningModule):
         # Extract SMILES from generated molecules
         mols_fake = self._convert_to_molecules(a_fake_onehot, x_fake_onehot)
         smiles_fake = [mol_to_smiles(mol) for mol in mols_fake if mol is not None]
-        print(a_fake_onehot)
+
         # Print the SMILES strings
         for smiles in smiles_fake:
             if smiles:
@@ -273,7 +273,7 @@ class MolGAN(LightningModule):
     def _generate_fake_data(self, batch):
         batch_size = batch.features["X"].size(0)
         a_fake, x_fake = self.generator(batch_size)
-        a_fake, x_fake = a_fake.to(self.device), x_fake.to(self.device) 
+        a_fake, x_fake = a_fake.to(self.device), x_fake.to(self.device)
         return a_fake, x_fake
 
     def _process_real_data(self, a_real, x_real):
@@ -341,31 +341,39 @@ class MolGAN(LightningModule):
         a_real, x_real = self._process_real_data(a_real, x_real)
         metrics_real = self._compute_metrics(a_real, x_real)
         v_real = self._aggregate_metrics(metrics_real)
-        a_fake, x_fake = self._generate_fake_data(batch)
-        a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
-        v_fake = self._apply_predictor(a_fake, x_fake)
-        metrics_fake = self._compute_metrics(a_fake, x_fake)
-        v_fake = self._aggregate_metrics(metrics_fake)
         v_pred_real = self._apply_predictor(a_real, x_real)[..., 0]
-        v_pred_fake = self._apply_predictor(a_fake, x_fake)[..., 0]
         v_real = torch.from_numpy(v_real).to(self.device).float()
-        v_fake = torch.from_numpy(v_fake).to(self.device).float()
         p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
-        p_loss_fake = nn.HuberLoss()(v_fake, v_pred_fake)
         p_loss_real_per_metric = {
             metric: nn.HuberLoss()(v_real, torch.from_numpy(v).to(self.device).float())
             for metric, v in metrics_real.items()
         }
-        p_loss_fake_per_metric = {
-            metric: nn.HuberLoss()(v_fake, torch.from_numpy(v).to(self.device).float())
-            for metric, v in metrics_fake.items()
-        }
         aux = {
             metric + "/real": loss for metric, loss in p_loss_real_per_metric.items()
         }
-        aux.update(
-            {metric + "/fake": loss for metric, loss in p_loss_fake_per_metric.items()}
-        )
+        if self.hparams.train_predictor_on_fake:
+            a_fake, x_fake = self._generate_fake_data(batch)
+            a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
+            v_fake = self._apply_predictor(a_fake, x_fake)
+            metrics_fake = self._compute_metrics(a_fake, x_fake)
+            v_fake = self._aggregate_metrics(metrics_fake)
+            v_pred_fake = self._apply_predictor(a_fake, x_fake)[..., 0]
+            v_fake = torch.from_numpy(v_fake).to(self.device).float()
+            p_loss_fake = nn.HuberLoss()(v_fake, v_pred_fake)
+            p_loss_fake_per_metric = {
+                metric: nn.HuberLoss()(
+                    v_fake, torch.from_numpy(v).to(self.device).float()
+                )
+                for metric, v in metrics_fake.items()
+            }
+            aux.update(
+                {
+                    metric + "/fake": loss
+                    for metric, loss in p_loss_fake_per_metric.items()
+                }
+            )
+        else:
+            p_loss_fake = 0.0
         p_loss = p_loss_real + p_loss_fake
         return p_loss, aux
 

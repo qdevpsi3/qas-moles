@@ -8,6 +8,8 @@ from rdkit import Chem, RDLogger
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
 
+from .metrics import ALL_METRICS
+
 # Disable RDKit logging
 RDLogger.DisableLog("rdApp.error")
 
@@ -29,8 +31,7 @@ def process_molecules(mols, add_h=False, max_atoms=None):
         mols = list(map(Chem.AddHs, mols))
     # Filter molecules by the number of atoms
     if max_atoms is not None:
-        filters = lambda x: x.GetNumAtoms() <= max_atoms
-        mols = list(filter(filters, mols))
+        mols = [mol for mol in mols if mol.GetNumAtoms() <= max_atoms]
     return mols
 
 
@@ -183,7 +184,7 @@ def extact_features(mols, max_length):
     data_Le = np.stack(data_Le)
     data_Lv = np.stack(data_Lv)
     print(
-        "Created {} features and adjacency matrices out of {} molecules!".format(
+        "Created {} features and adjacency matrices out of {} valid molecules!".format(
             len(valid_mols), len(mols)
         )
     )
@@ -205,19 +206,27 @@ def extract_smiles(mols):
     return smiles
 
 
+def extract_metrics(mols, metrics=["logp", "qed", "np", "sas"]):
+    """Extracts the specified metrics for the molecules."""
+    results = {metric: ALL_METRICS[metric]().compute_score(mols) for metric in metrics}
+    return results
+
+
 class MolecularSample(NamedTuple):
     mol: Chem.Mol
     smiles: str
     features: dict
+    metrics: dict
     is_batched: bool = False
 
 
 class MolecularDataset(Dataset):
 
-    def __init__(self, mols, smiles, features):
+    def __init__(self, mols, smiles, features, metrics=["logp", "qed", "np", "sas"]):
         self.mols = mols
         self.smiles = smiles
         self.features = features
+        self.metrics = metrics
 
         self.atom_encoder_m, self.atom_decoder_m, self.atom_num_types = (
             get_atom_encoders_decoders(self.mols)
@@ -230,6 +239,7 @@ class MolecularDataset(Dataset):
         )
         self.num_vertices = self.features["F"].shape[-2]
         self.num_features = self.features["F"].shape[-1]
+        self.metrics_values = extract_metrics(self.mols, metrics=self.metrics)
 
     def __len__(self):
         """Returns the number of valid molecules in the dataset."""
@@ -240,7 +250,8 @@ class MolecularDataset(Dataset):
         mol = self.mols[idx]
         smiles = self.smiles[idx]
         features = dict((k, v[idx]) for k, v in self.features.items())
-        return MolecularSample(mol, smiles, features)
+        metrics = dict((k, v[idx]) for k, v in self.metrics_values.items())
+        return MolecularSample(mol, smiles, features, metrics)
 
     def matrices2mol(self, node_labels, edge_labels, strict=False):
         """Converts node and edge labels back into a molecule object."""
@@ -296,21 +307,27 @@ def collate_fn(batch):
     """Custom collate function for MolecularDataset to handle batching of features."""
 
     # Unzip the batch to separate mols, smiles, and features
-    batch = [(sample.mol, sample.smiles, sample.features) for sample in batch]
-    mols, smiles_list, features_list = zip(*batch)
-
-    # Initialize a dictionary to hold batched features
+    batch = [
+        (sample.mol, sample.smiles, sample.features, sample.metrics) for sample in batch
+    ]
+    mols, smiles_list, features_list, metrics_list = zip(*batch)
+    # Stack the features and metrics
     batched_features = {}
-
-    # For each key in the features dictionary
     for key in features_list[0].keys():
-        # Stack the arrays from each sample to create a batch tensor
         batched_array = np.stack([features[key] for features in features_list], axis=0)
-        # Convert the numpy array to a PyTorch tensor
         batched_features[key] = torch.tensor(batched_array, dtype=torch.float32)
-
+    batched_metrics = {}
+    for key in metrics_list[0].keys():
+        batched_array = np.stack([metrics[key] for metrics in metrics_list], axis=0)
+        batched_metrics[key] = torch.tensor(batched_array, dtype=torch.float32)
     # Return the batched mols, smiles, and features
-    samples = MolecularSample(mols, smiles_list, batched_features, is_batched=True)
+    samples = MolecularSample(
+        mols,
+        smiles_list,
+        batched_features,
+        batched_metrics,
+        is_batched=True,
+    )
     return samples
 
 
