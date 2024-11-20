@@ -6,12 +6,56 @@ import torch
 from lightning import LightningDataModule
 from rdkit import Chem, RDLogger
 from torch.utils.data import DataLoader, Dataset, random_split
+from torch_geometric.data import Data
+from torchdrug.data import Molecule
 from tqdm import tqdm
 
 from .metrics import ALL_METRICS
 
 # Disable RDKit logging
 RDLogger.DisableLog("rdApp.error")
+
+
+def extract_graphs_from_features(features, library="pyg"):
+    node_features = features["X"]
+    adjacency_matrix = features["A"]
+    edge_indices = (
+        torch.tensor(
+            [
+                (src, dst)
+                for src, row in enumerate(adjacency_matrix)
+                for dst in range(len(row))
+                if adjacency_matrix[src, dst] > 0
+            ],
+            dtype=torch.long,
+        )
+        .t()
+        .contiguous()
+    )
+
+    edge_features = torch.tensor(
+        [adjacency_matrix[src, dst] for src, dst in edge_indices.t()],
+        dtype=torch.long,
+    )
+
+    if library == "pyg":
+        # PyTorch Geometric Data object
+        graph = Data(
+            x=node_features,
+            edge_index=edge_indices,
+            edge_attr=edge_features,
+        )
+    elif library == "torchdrug":
+        # TorchDrug Molecule object
+        graph = Molecule(
+            edge_list=edge_indices.t(),
+            atom_type=node_features[:, 0].long(),
+        )
+    else:
+        raise ValueError(
+            f"Unsupported library: {library}. Choose 'pyg' or 'torchdrug'."
+        )
+    return graph
 
 
 def extract_molecules_from_file(filename):
@@ -314,8 +358,9 @@ def collate_fn(batch):
     # Stack the features and metrics
     batched_features = {}
     for key in features_list[0].keys():
+        dtype = torch.long if key in ["X", "A", "S"] else torch.float32
         batched_array = np.stack([features[key] for features in features_list], axis=0)
-        batched_features[key] = torch.tensor(batched_array, dtype=torch.float32)
+        batched_features[key] = torch.tensor(batched_array, dtype=dtype)
     batched_metrics = {}
     for key in metrics_list[0].keys():
         batched_array = np.stack([metrics[key] for metrics in metrics_list], axis=0)
