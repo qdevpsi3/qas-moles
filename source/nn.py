@@ -5,8 +5,12 @@ import pennylane as qml
 import torch
 import torch.nn as nn
 from torch import nn
-from torchvision.ops import MLP
+from torch.nn.functional import one_hot
+from torch_geometric.data import Batch
+from torch_geometric.nn import Batch, GATConv
+from torch_geometric.utils import one_hot
 
+from .data import extract_graphs_from_features
 from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
 
 
@@ -148,10 +152,17 @@ class Generator(nn.Module):
         self.edges = self.dataset.bond_num_types
         self.nodes = self.dataset.atom_num_types
 
-        self.multi_dense_layers = MLP(
-            self.z_dim,
+        # self.multi_dense_layers = MLP(
+        #     self.z_dim,
+        #     self.conv_dims,
+        #     activation_layer=nn.Tanh,
+        #     dropout=self.dropout,
+        # )
+
+        self.multi_dense_layers = MultiDenseLayers(
+            z_dim,
             self.conv_dims,
-            activation_layer=nn.Tanh,
+            nn.Tanh,
             dropout=self.dropout,
         )
         self.edges_layer = nn.Linear(
@@ -264,3 +275,56 @@ class Discriminator(nn.Module):
         output = activation(output) if activation is not None else output
 
         return output, h
+
+
+class GNNDiscriminator(nn.Module):
+    """Discriminator network for MolGAN."""
+
+    def __init__(self, dataset, conv_dim=128, dropout=0.1):
+        super().__init__()
+        self.dataset = dataset
+        self.conv_dim = conv_dim
+        self._initialize_layers()
+
+    def _initialize_layers(self):
+        m_dim = self.dataset.atom_num_types
+        b_dim = self.dataset.bond_num_types
+
+        self.gnn_layer = GATConv(
+            in_channels=m_dim, out_channels=self.conv_dim, edge_dim=b_dim
+        )
+        self.output_layer = nn.Linear(self.conv_dim, 1)
+
+    def forward(self, adjacency_tensor, hidden, node, activation=None):
+        # Extract batch graphs from adjacency and node feature tensors
+        batch_graphs = [
+            extract_graphs_from_features({"A": a, "X": x})
+            for a, x in zip(adjacency_tensor, node)
+        ]
+        batch_graphs = Batch.from_data_list(batch_graphs)
+
+        # Convert node and edge attributes to one-hot encodings
+        m_dim = self.dataset.atom_num_types
+        b_dim = self.dataset.bond_num_types
+        batch_graphs.x = one_hot(batch_graphs.x, m_dim).float()
+        batch_graphs.edge_attr = one_hot(batch_graphs.edge_attr, b_dim).float()
+
+        # Pass through GNN layer
+        batch_features = self.gnn_layer(
+            batch_graphs.x, batch_graphs.edge_index, batch_graphs.edge_attr
+        )
+
+        # Reshape and aggregate graph-level features
+        batch_features = batch_features.reshape(
+            batch_graphs.num_graphs, -1, self.conv_dim
+        )
+        batch_features = batch_features.mean(dim=1)
+
+        # Pass through output layer
+        output = self.output_layer(batch_features)
+
+        # Apply activation if provided
+        if activation is not None:
+            output = activation(output)
+
+        return output, None
