@@ -25,7 +25,7 @@ def main():
         "--output", type=str, required=True, help="Output file (pickle)"
     )
     parser.add_argument(
-        "--max_atoms", type=int, default=9, help="Maximum number of atoms"
+        "--max_atoms", type=int, default=17, help="Maximum number of atoms"
     )
     parser.add_argument(
         "--max_mols",

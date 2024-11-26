@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch import nn
 from torch.nn.functional import one_hot
 from torch_geometric.data import Batch
-from torch_geometric.nn import Batch, GATConv
+from torch_geometric.nn import GATConv
 from torch_geometric.utils import one_hot
 
 from .data import extract_graphs_from_features
@@ -162,8 +162,8 @@ class Generator(nn.Module):
         self.multi_dense_layers = MultiDenseLayers(
             z_dim,
             self.conv_dims,
-            nn.Tanh,
-            dropout=self.dropout,
+            nn.Tanh(),
+            dropout_rate=self.dropout,
         )
         self.edges_layer = nn.Linear(
             self.conv_dims[-1], self.edges * self.vertexes * self.vertexes
@@ -304,10 +304,10 @@ class GNNDiscriminator(nn.Module):
         batch_graphs = Batch.from_data_list(batch_graphs)
 
         # Convert node and edge attributes to one-hot encodings
-        m_dim = self.dataset.atom_num_types
-        b_dim = self.dataset.bond_num_types
-        batch_graphs.x = one_hot(batch_graphs.x, m_dim).float()
-        batch_graphs.edge_attr = one_hot(batch_graphs.edge_attr, b_dim).float()
+        # m_dim = self.dataset.atom_num_types
+        # b_dim = self.dataset.bond_num_types
+        # batch_graphs.x = one_hot(batch_graphs.x, m_dim).float()
+        # batch_graphs.edge_attr = one_hot(batch_graphs.edge_attr, b_dim).float()
 
         # Pass through GNN layer
         batch_features = self.gnn_layer(
