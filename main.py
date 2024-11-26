@@ -6,7 +6,7 @@ import mlflow
 import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.loggers import MLFlowLogger
+from lightning.pytorch.loggers import MLFlowLogger, WandbLogger
 
 from source.data import MolecularDataModule, MolecularDataset
 from source.model import MolGAN
@@ -102,6 +102,12 @@ def parse_args():
         default="cpu",
         help="Device to use",
     )
+    parser.add_argument(
+        "--z_dim",
+        type=int,
+        default=8,
+        help="Dimension of the latent space",
+    )
     return parser.parse_args()
 
 
@@ -175,6 +181,12 @@ def main():
 
     # Setup the trainer with MLflow logging and checkpoint callback
     mlflow_logger = MLFlowLogger(experiment_name="molgan")
+    # wandb_logger = WandbLogger(
+    #     project="molgan",  # Change project name as required
+    #     name=f"molgan-run-{current_date_time}",
+    # )
+    # wandb_logger.watch(model, log="all", log_freq=100)
+
     trainer = Trainer(
         max_epochs=args.max_epochs,
         accelerator=args.accelerator,
