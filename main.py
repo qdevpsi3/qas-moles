@@ -127,9 +127,16 @@ def main():
 
     # Initialize networks
     if args.generator_type == "classical":
-        G = Generator(dataset)
+        G = Generator(
+            dataset,
+            z_dim=args.z_dim,
+        )
     elif args.generator_type == "quantum":
-        G = QuantumGenerator(dataset, use_shadows=args.use_shadows)
+        G = QuantumGenerator(
+            dataset,
+            use_shadows=args.use_shadows,
+            z_dim=args.z_dim,
+        )
     D = Discriminator(dataset)
     V = Discriminator(dataset)
     G.to(device)

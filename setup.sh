@@ -33,3 +33,26 @@ python -m scripts.build_dataset --input data/gdb9.sdf --output data/gdb9_molecul
 python -m scripts.build_dataset --input data/gdb9.sdf --output data/gdb9_molecular_dataset.pkl --max_atoms 9
 
 echo "Setup completed successfully."
+
+# Experiment variables
+DATA_PATH="./data/gdb9_molecular_dataset.pkl"
+EPOCHS=300
+BATCH_SIZE=128
+Z_DIM=4
+
+# Run experiments
+echo "Starting experiments..."
+
+# Classical generator
+echo "Training with classical generator..."
+python main.py --stage train --generator_type classical --data_path $DATA_PATH --max_epochs $EPOCHS --batch_size $BATCH_SIZE --z_dim $Z_DIM
+
+# Quantum generator without shadows
+echo "Training with quantum generator (no shadows)..."
+python main.py --stage train --generator_type quantum --use_shadows False --data_path $DATA_PATH --max_epochs $EPOCHS --batch_size $BATCH_SIZE --z_dim $Z_DIM
+
+# Quantum generator with shadows
+echo "Training with quantum generator (with shadows)..."
+python main.py --stage train --generator_type quantum --use_shadows True --data_path $DATA_PATH --max_epochs $EPOCHS --batch_size $BATCH_SIZE --z_dim $Z_DIM
+
+echo "All experiments completed successfully."
