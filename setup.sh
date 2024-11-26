@@ -37,7 +37,7 @@ echo "Setup completed successfully."
 # Experiment variables
 DATA_PATH="./data/gdb9_molecular_dataset.pkl"
 EPOCHS=300
-BATCH_SIZE=128
+BATCH_SIZE=32
 Z_DIM=4
 
 # Run experiments
