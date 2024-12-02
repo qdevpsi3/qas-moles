@@ -320,11 +320,12 @@ class MolecularDataModule(LightningDataModule):
         dataset,
         *,
         batch_size=32,
+        num_workers=63,
         train_test_val_split=(0.8, 0.1, 0.1),
     ):
         super().__init__()
         # Save the batch size as a hyperparameter
-        self.save_hyperparameters("batch_size")
+        self.save_hyperparameters("batch_size", "num_workers")
         # Save the dataset
         self.dataset = dataset
         self.train_test_val_split = train_test_val_split
@@ -357,6 +358,7 @@ class MolecularDataModule(LightningDataModule):
             batch_size=self.hparams.batch_size,
             shuffle=True,
             collate_fn=collate_fn,
+            num_workers=self.hparams.num_workers,
         )
 
     def val_dataloader(self):
@@ -365,6 +367,7 @@ class MolecularDataModule(LightningDataModule):
             self.val_dataset,
             batch_size=self.hparams.batch_size,
             collate_fn=collate_fn,
+            num_workers=self.hparams.num_workers,
         )
 
     def test_dataloader(self):
@@ -373,4 +376,5 @@ class MolecularDataModule(LightningDataModule):
             self.test_dataset,
             batch_size=self.hparams.batch_size,
             collate_fn=collate_fn,
+            num_workers=self.hparams.num_workers,
         )
