@@ -18,15 +18,19 @@ This guide provides instructions on how to train and test the MolGAN model using
 ---
 
 ## Setup Instructions
+1. **Setup conda environment:**
+   ```bash
+   conda create --name qasmole python=3.10
+   ```
 
-1. **Clone the repository:**
+2. **Clone the repository:**
 
    ```bash
    git clone https://github.com/qdevpsi3/qas-moles.git
    cd qas-moles
    ```
 
-2. **Install the requirements:**
+3. **Install the requirements:**
 
    ```bash
    pip install -r requirements.txt
@@ -34,7 +38,7 @@ This guide provides instructions on how to train and test the MolGAN model using
 
    This will install all the necessary Python dependencies for the project.
 
-3. **Run the setup script:**
+4. **Run the setup script:**
 
    ```bash
    bash setup.sh
