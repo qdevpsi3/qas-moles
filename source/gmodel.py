@@ -103,7 +103,7 @@ class GaussianGAN(LightningModule):
 
     def _apply_predictor(self, x):
         # Predictor outputs logits for y=1
-        return self.predictor(x)
+        return torch.sigmoid(self.predictor(x))
 
     def _calculate_gradient_penalty(self, y, x):
         """Compute gradient penalty: (L2_norm(dy/dx) - 1)**2."""
