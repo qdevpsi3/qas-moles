@@ -8,7 +8,7 @@ from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger, WandbLogger
 
-from source.data import MolecularDataModule, MolecularDataset
+from source.data import DataModule, MolecularDataset
 from source.model import MolGAN
 from source.nn import Discriminator, Generator, QuantumGenerator
 
@@ -122,7 +122,7 @@ def main():
 
     # Load data module
     dataset = MolecularDataset.load(args.data_path)
-    datamodule = MolecularDataModule(dataset, batch_size=args.batch_size)
+    datamodule = DataModule(dataset, batch_size=args.batch_size)
     datamodule.setup()
 
     # Initialize networks
