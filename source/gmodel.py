@@ -102,7 +102,6 @@ class GaussianGAN(LightningModule):
         return self.discriminator(x)
 
     def _apply_predictor(self, x):
-        # Predictor outputs logits for y=1
         return torch.sigmoid(self.predictor(x))
 
     def _calculate_gradient_penalty(self, y, x):
@@ -195,19 +194,71 @@ class GaussianGAN(LightningModule):
             )
 
     def validation_step(self, batch, batch_idx):
-        # Compute predictor accuracy on real data for validation
+        # Real data evaluation
         x_real = batch.features["X"].to(self.device)
         y_real = batch.metrics["y"].to(self.device).float()
         pred_real = self._apply_predictor(x_real)
-        val_acc = ((pred_real > 0).float() == y_real).float().mean()
+        val_acc = ((pred_real > 0.5).float() == y_real).float().mean()
+        val_real_mean_pred = pred_real.mean()
+
+        # Log mean for each dimension of real data
+        for dim in range(x_real.size(1)):
+            dim_mean = x_real[:, dim].mean()
+            self.log(f"val_real_mean_dim_{dim}", dim_mean, on_epoch=True, logger=True)
+
+        # Fake data evaluation
+        batch_size = x_real.size(0)
+        x_fake = self._generate_fake_data(batch_size)
+        pred_fake = self._apply_predictor(x_fake)
+        val_fake_mean_pred = pred_fake.mean()
+
+        # Log mean for each dimension of fake data
+        for dim in range(x_fake.size(1)):
+            dim_mean = x_fake[:, dim].mean()
+            self.log(f"val_fake_mean_dim_{dim}", dim_mean, on_epoch=True, logger=True)
+
+        # Log overall metrics
         self.log("val_acc", val_acc, on_epoch=True, prog_bar=True, logger=True)
-        return val_acc
+        self.log("val_real_mean_pred", val_real_mean_pred, on_epoch=True, logger=True)
+        self.log("val_fake_mean_pred", val_fake_mean_pred, on_epoch=True, logger=True)
+
+        return {
+            "val_acc": val_acc,
+            "val_real_mean_pred": val_real_mean_pred,
+            "val_fake_mean_pred": val_fake_mean_pred,
+        }
 
     def test_step(self, batch, batch_idx):
-        # Compute predictor accuracy on test data
+        # Real data evaluation
         x_real = batch.features["X"].to(self.device)
         y_real = batch.metrics["y"].to(self.device).float()
         pred_real = self._apply_predictor(x_real)
-        test_acc = ((pred_real > 0).float() == y_real).float().mean()
+        test_acc = ((pred_real > 0.5).float() == y_real).float().mean()
+        test_real_mean_pred = pred_real.mean()
+
+        # Log mean for each dimension of real data
+        for dim in range(x_real.size(1)):
+            dim_mean = x_real[:, dim].mean()
+            self.log(f"test_real_mean_dim_{dim}", dim_mean, on_epoch=True, logger=True)
+
+        # Fake data evaluation
+        batch_size = x_real.size(0)
+        x_fake = self._generate_fake_data(batch_size)
+        pred_fake = self._apply_predictor(x_fake)
+        test_fake_mean_pred = pred_fake.mean()
+
+        # Log mean for each dimension of fake data
+        for dim in range(x_fake.size(1)):
+            dim_mean = x_fake[:, dim].mean()
+            self.log(f"test_fake_mean_dim_{dim}", dim_mean, on_epoch=True, logger=True)
+
+        # Log overall metrics
         self.log("test_acc", test_acc, on_epoch=True, prog_bar=True, logger=True)
-        return test_acc
+        self.log("test_real_mean_pred", test_real_mean_pred, on_epoch=True, logger=True)
+        self.log("test_fake_mean_pred", test_fake_mean_pred, on_epoch=True, logger=True)
+
+        return {
+            "test_acc": test_acc,
+            "test_real_mean_pred": test_real_mean_pred,
+            "test_fake_mean_pred": test_fake_mean_pred,
+        }
