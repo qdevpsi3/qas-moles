@@ -178,7 +178,7 @@ def main():
     else:
         filename = f"best-checkpoint-quantum-no-shadows-{current_date_time}"
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_metric",
+        monitor="Aggregated_metric_during_validation",
         save_top_k=1,
         mode="max",
         dirpath="checkpoints/",

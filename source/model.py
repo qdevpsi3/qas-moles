@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from lightning import LightningModule
 from rdkit import Chem
 from torch import nn
+import tempfile
+from pathlib import Path
 
 from .metrics import ALL_METRICS
 
@@ -124,7 +126,7 @@ class MolGAN(LightningModule):
         d_optim.step()
         d_optim.zero_grad()
         self.log(
-            "disc_loss",
+            "Discriminator Loss",
             d_loss,
             on_step=True,
             on_epoch=True,
@@ -139,7 +141,7 @@ class MolGAN(LightningModule):
         p_optim.step()
         p_optim.zero_grad()
         self.log(
-            "pred_loss",
+            "Predictor_loss",
             p_loss,
             on_step=True,
             on_epoch=True,
@@ -165,7 +167,7 @@ class MolGAN(LightningModule):
             g_optim.step()
             g_optim.zero_grad()
             self.log(
-                "gen_loss",
+                "Generator_Loss",
                 g_loss,
                 on_step=True,
                 on_epoch=True,
@@ -191,13 +193,13 @@ class MolGAN(LightningModule):
         # Compute metrics on real data
         metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
         avg_metrics_real = {
-            f"val_real_{k}": np.mean(v) for k, v in metrics_real.items()
+            f"Validation_step_real_data_{k}": np.mean(v) for k, v in metrics_real.items()
         }
 
         # Compute metrics on generated data
         metrics_fake = self._compute_metrics(a_fake_onehot, x_fake_onehot)
         avg_metrics_fake = {
-            f"val_fake_{k}": np.mean(v) for k, v in metrics_fake.items()
+            f"Validation_step_fake_data_{k}": np.mean(v) for k, v in metrics_fake.items()
         }
 
         # Extract SMILES from generated molecules
@@ -211,13 +213,19 @@ class MolGAN(LightningModule):
         # Optionally, compute an aggregated validation metric
         val_metric = np.mean(list(avg_metrics_fake.values()))
         self.log(
-            "val_metric",
+            "Aggregated_metric_during_validation",
             val_metric,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
             logger=True,
         )
+
+        logger_  = self.logger.experiment
+
+        smiles_ = "\n".join(smiles_fake)
+        logger_.log_text(text=smiles_, artifact_file="smiles_generated.txt", run_id=self.logger.run_id)
+        self.log("smiles_logged", 1)
 
         return smiles_fake
 
@@ -235,13 +243,13 @@ class MolGAN(LightningModule):
         # Compute metrics on real data
         metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
         avg_metrics_real = {
-            f"test_real_{k}": np.mean(v) for k, v in metrics_real.items()
+            f"Test_step_real_data_{k}": np.mean(v) for k, v in metrics_real.items()
         }
 
         # Compute metrics on generated data
         metrics_fake = self._compute_metrics(a_fake_onehot, x_fake_onehot)
         avg_metrics_fake = {
-            f"test_fake_{k}": np.mean(v) for k, v in metrics_fake.items()
+            f"Test_step_fake_data_{k}": np.mean(v) for k, v in metrics_fake.items()
         }
 
         # Extract SMILES from generated molecules
@@ -260,7 +268,7 @@ class MolGAN(LightningModule):
         # Optionally, compute an aggregated test metric
         test_metric = np.mean(list(avg_metrics_fake.values()))
         self.log(
-            "test_metric",
+            "Aggregated_metric_during_test",
             test_metric,
             on_step=False,
             on_epoch=True,
@@ -350,6 +358,7 @@ class MolGAN(LightningModule):
         aux = {
             metric + "/real": loss for metric, loss in p_loss_real_per_metric.items()
         }
+
         if self.hparams.train_predictor_on_fake:
             a_fake, x_fake = self._generate_fake_data(batch)
             a_fake, x_fake = self._process_fake_data(a_fake, x_fake)
