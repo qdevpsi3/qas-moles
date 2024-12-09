@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from lightning import LightningDataModule
 from rdkit import Chem, RDLogger
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, default_collate, random_split
 from torch_geometric.data import Data
 from torchdrug.data import Molecule
 from tqdm import tqdm
@@ -256,6 +256,62 @@ def extract_metrics(mols, metrics=["logp", "qed", "np", "sas"]):
     return results
 
 
+class GaussianSample(NamedTuple):
+    features: dict
+    metrics: dict
+    is_batched: bool = False
+
+
+class TwoGaussianDataset(Dataset):
+    def __init__(
+        self,
+        num_samples=20000,
+        dim=2,
+        mean0=(-10.0, -10.0),
+        mean1=(10.0, 10.0),
+        std0=1.0,
+        std1=1.0,
+    ):
+        # Validate means
+        if len(mean0) != dim or len(mean1) != dim:
+            raise ValueError("mean0 and mean1 must have length equal to 'dim'.")
+
+        half_samples = num_samples // 2
+
+        # Generate data for the first Gaussian (label = 0)
+        gauss0 = torch.randn(half_samples, dim) * std0 + torch.tensor(
+            mean0, dtype=torch.float32
+        )
+        labels0 = torch.zeros(half_samples, 1)
+
+        # Generate data for the second Gaussian (label = 1)
+        gauss1 = torch.randn(half_samples, dim) * std1 + torch.tensor(
+            mean1, dtype=torch.float32
+        )
+        labels1 = torch.ones(half_samples, 1)
+
+        # Combine and shuffle
+        self.data = torch.cat([gauss0, gauss1], dim=0)
+        self.labels = torch.cat([labels0, labels1], dim=0)
+
+        # Optional: shuffle the combined data
+        perm = torch.randperm(self.data.size(0))
+        self.data = self.data[perm]
+        self.labels = self.labels[perm]
+
+    def __len__(self):
+        return self.data.size(0)
+
+    def __getitem__(self, idx):
+        return GaussianSample({"X": self.data[idx]}, {"y": self.labels[idx]})
+
+    @staticmethod
+    def collate_fn(batch):
+        batch = default_collate(batch)
+        batch = batch._replace(is_batched=True)
+        return batch
+
+
 class MolecularSample(NamedTuple):
     mol: Chem.Mol
     smiles: str
@@ -346,37 +402,40 @@ class MolecularDataset(Dataset):
 
         return mol
 
+    @staticmethod
+    def collate_fn(batch):
+        """Custom collate function for MolecularDataset to handle batching of features."""
 
-def collate_fn(batch):
-    """Custom collate function for MolecularDataset to handle batching of features."""
+        # Unzip the batch to separate mols, smiles, and features
+        batch = [
+            (sample.mol, sample.smiles, sample.features, sample.metrics)
+            for sample in batch
+        ]
+        mols, smiles_list, features_list, metrics_list = zip(*batch)
+        # Stack the features and metrics
+        batched_features = {}
+        for key in features_list[0].keys():
+            dtype = torch.long if key in ["X", "A", "S"] else torch.float32
+            batched_array = np.stack(
+                [features[key] for features in features_list], axis=0
+            )
+            batched_features[key] = torch.tensor(batched_array, dtype=dtype)
+        batched_metrics = {}
+        for key in metrics_list[0].keys():
+            batched_array = np.stack([metrics[key] for metrics in metrics_list], axis=0)
+            batched_metrics[key] = torch.tensor(batched_array, dtype=torch.float32)
+        # Return the batched mols, smiles, and features
+        samples = MolecularSample(
+            mols,
+            smiles_list,
+            batched_features,
+            batched_metrics,
+            is_batched=True,
+        )
+        return samples
 
-    # Unzip the batch to separate mols, smiles, and features
-    batch = [
-        (sample.mol, sample.smiles, sample.features, sample.metrics) for sample in batch
-    ]
-    mols, smiles_list, features_list, metrics_list = zip(*batch)
-    # Stack the features and metrics
-    batched_features = {}
-    for key in features_list[0].keys():
-        dtype = torch.long if key in ["X", "A", "S"] else torch.float32
-        batched_array = np.stack([features[key] for features in features_list], axis=0)
-        batched_features[key] = torch.tensor(batched_array, dtype=dtype)
-    batched_metrics = {}
-    for key in metrics_list[0].keys():
-        batched_array = np.stack([metrics[key] for metrics in metrics_list], axis=0)
-        batched_metrics[key] = torch.tensor(batched_array, dtype=torch.float32)
-    # Return the batched mols, smiles, and features
-    samples = MolecularSample(
-        mols,
-        smiles_list,
-        batched_features,
-        batched_metrics,
-        is_batched=True,
-    )
-    return samples
 
-
-class MolecularDataModule(LightningDataModule):
+class DataModule(LightningDataModule):
     def __init__(
         self,
         dataset,
@@ -418,7 +477,7 @@ class MolecularDataModule(LightningDataModule):
             self.train_dataset,
             batch_size=self.hparams.batch_size,
             shuffle=True,
-            collate_fn=collate_fn,
+            collate_fn=self.dataset.collate_fn,
         )
 
     def val_dataloader(self):
@@ -426,13 +485,12 @@ class MolecularDataModule(LightningDataModule):
         return DataLoader(
             self.val_dataset,
             batch_size=self.hparams.batch_size,
-            collate_fn=collate_fn,
+            collate_fn=self.dataset.collate_fn,
         )
 
     def test_dataloader(self):
         # Returns the testing dataloader.
         return DataLoader(
             self.test_dataset,
-            batch_size=self.hparams.batch_size,
-            collate_fn=collate_fn,
+            collate_fn=self.dataset.collate_fn,
         )
