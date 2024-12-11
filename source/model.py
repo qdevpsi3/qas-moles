@@ -198,8 +198,13 @@ class MolGAN(LightningModule):
 
         # Compute metrics on generated data
         metrics_fake = self._compute_metrics(a_fake_onehot, x_fake_onehot)
+        # avg_metrics_fake = {
+        #     f"Validation_step_fake_data_{k}": np.mean(v) for k, v in metrics_fake.items()
+        # }
+
         avg_metrics_fake = {
-            f"Validation_step_fake_data_{k}": np.mean(v) for k, v in metrics_fake.items()
+            f"Validation_step_fake_data_{k}": np.mean([val for val in v if val is not None])
+        for k, v in metrics_fake.items()
         }
 
         # Extract SMILES from generated molecules
@@ -221,11 +226,12 @@ class MolGAN(LightningModule):
             logger=True,
         )
 
+        # Log the smiles as artifacts
         logger_  = self.logger.experiment
-
-        smiles_ = "\n".join(smiles_fake)
-        logger_.log_text(text=smiles_, artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt", run_id=self.logger.run_id)
-        self.log("smiles_logged", 1)
+        logger_.log_text(text="\n".join(smiles_fake), 
+                         artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt", 
+                         run_id=self.logger.run_id)
+        
 
         return smiles_fake
 
