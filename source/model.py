@@ -224,7 +224,7 @@ class MolGAN(LightningModule):
         logger_  = self.logger.experiment
 
         smiles_ = "\n".join(smiles_fake)
-        logger_.log_text(text=smiles_, artifact_file="smiles_generated.txt", run_id=self.logger.run_id)
+        logger_.log_text(text=smiles_, artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt", run_id=self.logger.run_id)
         self.log("smiles_logged", 1)
 
         return smiles_fake
