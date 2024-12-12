@@ -1,11 +1,12 @@
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from lightning import LightningModule
 from rdkit import Chem
 from torch import nn
-import tempfile
-from pathlib import Path
 
 from .metrics import ALL_METRICS
 
@@ -193,7 +194,8 @@ class MolGAN(LightningModule):
         # Compute metrics on real data
         metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
         avg_metrics_real = {
-            f"Validation_step_real_data_{k}": np.mean(v) for k, v in metrics_real.items()
+            f"Validation_step_real_data_{k}": np.mean(v)
+            for k, v in metrics_real.items()
         }
 
         # Compute metrics on generated data
@@ -203,8 +205,10 @@ class MolGAN(LightningModule):
         # }
 
         avg_metrics_fake = {
-            f"Validation_step_fake_data_{k}": np.mean([val for val in v if val is not None])
-        for k, v in metrics_fake.items()
+            f"Validation_step_fake_data_{k}": np.mean(
+                [val for val in v if val is not None]
+            )
+            for k, v in metrics_fake.items()
         }
 
         # Extract SMILES from generated molecules
@@ -227,11 +231,12 @@ class MolGAN(LightningModule):
         )
 
         # Log the smiles as artifacts
-        logger_  = self.logger.experiment
-        logger_.log_text(text="\n".join(smiles_fake), 
-                         artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt", 
-                         run_id=self.logger.run_id)
-        
+        logger_ = self.logger.experiment
+        logger_.log_text(
+            text="\n".join(smiles_fake),
+            artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt",
+            run_id=self.logger.run_id,
+        )
 
         return smiles_fake
 
@@ -303,10 +308,10 @@ class MolGAN(LightningModule):
         return a_fake, x_fake
 
     def _apply_discriminator(self, a, x):
-        return self.discriminator(a, None, x)[0]
+        return self.discriminator(x, a)[0]
 
     def _apply_predictor(self, a, x):
-        return torch.sigmoid(self.predictor(a, None, x)[0])
+        return torch.sigmoid(self.predictor(x, a)[0])
 
     def _aggregate_metrics(self, metrics):
         values = np.stack(

@@ -8,9 +8,9 @@ general:
   save_dir: checkpoints
   stage: train
 model:
-  generator_type: classical
-  use_shadows: false
-  z_dim: 8
+  discriminator_type: molgan
+  generator_type: molgan
+  predictor_type: molgan
 training:
   agg_method: prod
   checkpoint_path: null

@@ -136,7 +136,7 @@ class MultiDenseLayers(nn.Module):
         self.activation = activation
         self.dropout_rate = dropout_rate
         layers = list()
-        for c0, c1 in zip([aux_unit] + linear_units[:-1], linear_units):
+        for c0, c1 in zip([aux_unit] + list(linear_units[:-1]), linear_units):
             layers.append(nn.Linear(c0, c1))
             if activation is not None:
                 layers.append(activation)

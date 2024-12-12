@@ -1,22 +1,163 @@
 import random
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pennylane as qml
 import torch
 import torch.nn as nn
-from torch import nn
-from torch.nn.functional import one_hot
 from torch_geometric.data import Batch
 from torch_geometric.nn import GATConv
-from torch_geometric.utils import one_hot
 
 from .data import extract_graphs_from_features
 from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
 
 
-class QuantumMolGanNoise(nn.Module):
+class BaseNN(nn.Module, ABC):
+    """Abstract base class for all neural network modules with a build method."""
+
+    _built = False
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._registery = {}
+
+    def forward(self, *args, **kwargs):
+        if not self._built:
+            raise RuntimeError("Module must be built before forward pass.")
+        return self._forward(*args, **kwargs)
+
+    def build(self, *args, **kwargs):
+        """Build the module layers based on given input/output sizes or parameters."""
+        super().__init__()
+        self._build(*args, **kwargs)
+        self._built = True
+
+    @classmethod
+    def register(cls, name, **kwargs):
+        """Register the class with the factory."""
+        cls._registery[name] = cls(**kwargs)
+
+    @abstractmethod
+    def _forward(self, *args, **kwargs):
+        """This is where the forward logic lives after build has been called."""
+        pass
+
+    @abstractmethod
+    def _build(self, *args, **kwargs):
+        """Build the module layers based on given input/output sizes or parameters."""
+        pass
+
+
+class BaseGenerator(BaseNN):
+    """Abstract base class for generators."""
+
+    @abstractmethod
+    def _build(
+        self,
+        num_vertices: int,
+        num_bond_types: int,
+        num_atom_types: int,
+    ):
+        pass
+
+    @abstractmethod
+    def _forward(self, batch_size: int):
+        pass
+
+
+class BaseDiscriminator(BaseNN, ABC):
+    """Abstract base class for discriminators."""
+
+    @abstractmethod
+    def _build(
+        self,
+        num_vertices: int,
+        num_bond_types: int,
+        num_atom_types: int,
+    ):
+        pass
+
+    @abstractmethod
+    def _forward(self, x, a):
+        pass
+
+
+class BasePredictor(BaseNN, ABC):
+    """Abstract base class for discriminators."""
+
+    @abstractmethod
+    def _build(
+        self,
+        num_vertices: int,
+        num_bond_types: int,
+        num_atom_types: int,
+        num_metrics: int,
+    ):
+        pass
+
+    @abstractmethod
+    def _forward(self, x, a):
+        pass
+
+
+########################################
+# Generator Class
+########################################
+
+
+@dataclass(unsafe_hash=True)
+class MolGANGenerator(BaseGenerator):
+    z_dim: int = 8
+    conv_dims: List[int] = (128, 256)
+    dropout: float = 0.0
+
+    def _build(self, num_vertices: int, num_bond_types: int, num_atom_types: int):
+        self._num_vertices = num_vertices
+        self._num_bond_types = num_bond_types
+        self._num_atom_types = num_atom_types
+        self.multi_dense_layers = MultiDenseLayers(
+            self.z_dim, self.conv_dims, nn.Tanh(), dropout_rate=self.dropout
+        )
+        self.edges_layer = nn.Linear(
+            self.conv_dims[-1],
+            num_bond_types * num_vertices * num_vertices,
+        )
+        self.nodes_layer = nn.Linear(self.conv_dims[-1], num_vertices * num_atom_types)
+        self.dropout_layer = nn.Dropout(self.dropout)
+
+    def _generate_z(self, batch_size: int):
+        return torch.rand(batch_size, self.z_dim).to(next(self.parameters()).device)
+
+    def _forward(self, batch_size: int):
+        z = self._generate_z(batch_size)
+        output = self.multi_dense_layers(z)
+
+        edges_logits = self.edges_layer(output).view(
+            -1,
+            self._num_bond_types,
+            self._num_vertices,
+            self._num_vertices,
+        )
+        edges_logits = (edges_logits + edges_logits.permute(0, 1, 3, 2)) / 2
+        edges_logits = self.dropout_layer(edges_logits.permute(0, 2, 3, 1))
+
+        nodes_logits = self.nodes_layer(output)
+        nodes_logits = self.dropout_layer(
+            nodes_logits.view(
+                -1,
+                self._num_vertices,
+                self._num_atom_types,
+            )
+        )
+
+        return edges_logits, nodes_logits
+
+
+class QMolGANNoise(nn.Module):
     def __init__(self, num_qubits: int = 8, num_layers: int = 3):
-        super(QuantumMolGanNoise, self).__init__()
+        super(QMolGANNoise, self).__init__()
 
         # Register the parameters with the module
         self.num_qubits = num_qubits
@@ -62,191 +203,59 @@ class QuantumMolGanNoise(nn.Module):
         return noise
 
 
-class QuantumShadowNoise(nn.Module):
-    @staticmethod
-    def build_qnode(num_qubits, num_layers, num_basis):
+@dataclass(unsafe_hash=True)
+class QMolGANGenerator(MolGANGenerator):
+    num_circuit_qubits: int = 8
+    num_circuit_layers: int = 3
+    conv_dims: Tuple[int] = (128, 256)
+    dropout: float = 0.0
 
-        paulis = [qml.PauliZ, qml.PauliX, qml.PauliY, qml.Identity]
-        basis = [
-            qml.operation.Tensor(*[random.choice(paulis)(i) for i in range(num_qubits)])
-            for _ in range(num_basis)
-        ]
-
-        dev = qml.device("default.qubit", wires=num_qubits, shots=300)
-
-        @qml.qnode(dev, interface="torch", diff_method="best")
-        def gen_circuit(w):
-            z1 = random.uniform(-1, 1)
-            z2 = random.uniform(-1, 1)
-            # construct generator circuit for both atom vector and node matrix
-            for i in range(num_qubits):
-                qml.RY(np.arcsin(z1), wires=i)
-                qml.RZ(np.arcsin(z2), wires=i)
-            for l in range(num_layers):
-                for i in range(num_qubits):
-                    qml.RY(w[l][i], wires=i)
-                for i in range(num_qubits - 1):
-                    qml.CNOT(wires=[i, i + 1])
-                    qml.RZ(w[l][i + num_qubits], wires=i + 1)
-                    qml.CNOT(wires=[i, i + 1])
-            return qml.shadow_expval(basis)
-
-        return basis, gen_circuit
-
-    def __init__(
+    def _build(
         self,
-        z_dim: int,
-        *,
-        num_qubits: int = 8,
-        num_layers: int = 3,
-        num_basis: int = 3,
+        num_vertices: int,
+        num_bond_types: int,
+        num_atom_types: int,
     ):
-        super(QuantumShadowNoise, self).__init__()
+        self.z_dim = self.num_circuit_qubits
+        super()._build(num_vertices, num_bond_types, num_atom_types)
+        self.q_noise = QMolGANNoise(self.num_circuit_qubits, self.num_circuit_layers)
 
-        # Register the parameters with the module
-        self.z_dim = z_dim
-        self.num_qubits = num_qubits
-        self.num_layers = num_layers
-        self.num_basis = num_basis
-
-        self.basis, self.gen_circuit = self.build_qnode(
-            num_qubits, num_layers, num_basis
-        )
-
-        # Initialize weights with PyTorch (between -pi and pi) and register as a learnable parameter
-        self.weights = nn.Parameter(
-            torch.rand(num_layers, (num_qubits * 2 - 1)) * 2 * torch.pi - torch.pi
-        )
-        self.coeffs = nn.Parameter(torch.rand(num_basis, self.z_dim))
-
-    def forward(self, batch_size: int):
-        sample_list = [
-            torch.cat(
-                [tensor.unsqueeze(0) for tensor in self.gen_circuit(self.weights)]
-            )
-            for _ in range(batch_size)
-        ]
-        noise = torch.stack(tuple(sample_list)).float()
-        noise = torch.matmul(noise, self.coeffs)
-        return noise
-
-
-class Generator(nn.Module):
-    """Generator network of MolGAN"""
-
-    def __init__(
-        self,
-        dataset,
-        *,
-        conv_dims=[128, 256],
-        z_dim=8,
-        dropout=0.0,
-    ):
-        super(Generator, self).__init__()
-        self.dataset = dataset
-        self.conv_dims = conv_dims
-        self.z_dim = z_dim
-        self.dropout = dropout
-
-        self.vertexes = self.dataset.num_vertices
-        self.edges = self.dataset.bond_num_types
-        self.nodes = self.dataset.atom_num_types
-
-        # self.multi_dense_layers = MLP(
-        #     self.z_dim,
-        #     self.conv_dims,
-        #     activation_layer=nn.Tanh,
-        #     dropout=self.dropout,
-        # )
-
-        self.multi_dense_layers = MultiDenseLayers(
-            z_dim,
-            self.conv_dims,
-            nn.Tanh(),
-            dropout_rate=self.dropout,
-        )
-        self.edges_layer = nn.Linear(
-            self.conv_dims[-1], self.edges * self.vertexes * self.vertexes
-        )
-        self.nodes_layer = nn.Linear(self.conv_dims[-1], self.vertexes * self.nodes)
-        self.dropout_layer = nn.Dropout(self.dropout)
-
-    def _generate_z(self, batch_size):
-        return torch.rand(batch_size, self.z_dim).to(next(self.parameters()).device)
-
-    def forward(self, batch_size):
-        z = self._generate_z(batch_size)
-        z = z.to(next(self.parameters()).device)
-        output = self.multi_dense_layers(z)
-        edges_logits = self.edges_layer(output).view(
-            -1, self.edges, self.vertexes, self.vertexes
-        )
-        edges_logits = (edges_logits + edges_logits.permute(0, 1, 3, 2)) / 2
-        edges_logits = self.dropout_layer(edges_logits.permute(0, 2, 3, 1))
-
-        nodes_logits = self.nodes_layer(output)
-        nodes_logits = self.dropout_layer(
-            nodes_logits.view(-1, self.vertexes, self.nodes)
-        )
-
-        return edges_logits, nodes_logits
-
-
-class QuantumGenerator(Generator):
-    """Quantum Generator network of MolGAN"""
-
-    def __init__(
-        self,
-        dataset,
-        *,
-        conv_dims=[128, 256],
-        z_dim=8,
-        dropout=0.0,
-        use_shadows=False,
-    ):
-        super(QuantumGenerator, self).__init__(
-            dataset,
-            conv_dims=conv_dims,
-            z_dim=z_dim,
-            dropout=dropout,
-        )
-        if use_shadows:
-            self.noise_generator = QuantumShadowNoise(z_dim)
-        else:
-            self.noise_generator = QuantumMolGanNoise(z_dim)
-
-    def _generate_z(self, batch_size):
+    def _generate_z(self, batch_size: int):
         return self.noise_generator(batch_size)
 
 
-class Discriminator(nn.Module):
+########################################
+# Discriminator Class
+########################################
+@dataclass(unsafe_hash=True)
+class MolGANDiscriminator(BaseDiscriminator):
     """Discriminator network of MolGAN"""
 
-    def __init__(
+    conv_dims: Tuple[List[int]] = ((128, 64), 128, (128, 64))
+    f_dim: int = 0
+    with_features: bool = False
+    dropout: float = 0.0
+
+    def _build(
         self,
-        dataset,
-        *,
-        conv_dims=[[128, 64], 128, [128, 64]],
-        with_features=False,
-        f_dim=0,
-        dropout=0.0,
+        num_vertices: int,
+        num_bond_types: int,
+        num_atom_types: int,
+        num_metrics: int,
     ):
-        super(Discriminator, self).__init__()
-        self.dataset = dataset
-        self.conv_dims = conv_dims
-        self.with_features = with_features
-        self.f_dim = f_dim
-        self.dropout = dropout
+        m_dim = num_atom_types
+        b_dim = num_bond_types - 1
+        graph_conv_dim, aux_dim, linear_dim = self.conv_dims
 
-        self._initialize()
-
-    def _initialize(self):
-        m_dim = self.dataset.atom_num_types
-        b_dim = self.dataset.bond_num_types - 1
         self.activation_f = nn.Tanh()
         graph_conv_dim, aux_dim, linear_dim = self.conv_dims
         self.gcn_layer = GraphConvolution(
-            m_dim, graph_conv_dim, b_dim, self.with_features, self.f_dim, self.dropout
+            m_dim,
+            graph_conv_dim,
+            b_dim,
+            self.with_features,
+            self.f_dim,
+            self.dropout,
         )
         self.agg_layer = GraphAggregation(
             graph_conv_dim[-1] + m_dim,
@@ -264,67 +273,56 @@ class Discriminator(nn.Module):
         )
         self.output_layer = nn.Linear(linear_dim[-1], 1)
 
-    def forward(self, adjacency_tensor, hidden, node, activation=None):
-        adj = adjacency_tensor[:, :, :, 1:].permute(0, 3, 1, 2)
-        h = self.gcn_layer(node, adj, hidden)
-        h = self.agg_layer(node, h, hidden)
-
+    def _forward(self, x, a):
+        adj = a[:, :, :, 1:].permute(0, 3, 1, 2)
+        h = self.gcn_layer(x, adj)
+        h = self.agg_layer(x, h)
         h = self.multi_dense_layers(h)
-
         output = self.output_layer(h)
-        output = activation(output) if activation is not None else output
-
         return output, h
 
 
-class GNNDiscriminator(nn.Module):
-    """Discriminator network for MolGAN."""
+@dataclass(unsafe_hash=True)
+class GNNDiscriminator(BaseDiscriminator):
+    """GNN-based Discriminator for MolGAN."""
 
-    def __init__(self, dataset, conv_dim=128, dropout=0.1):
-        super().__init__()
-        self.dataset = dataset
-        self.conv_dim = conv_dim
-        self._initialize_layers()
+    conv_dim: int = 128
+    dropout: float = 0.1
 
-    def _initialize_layers(self):
-        m_dim = self.dataset.atom_num_types
-        b_dim = self.dataset.bond_num_types
+    def _build(self, num_vertices: int, num_bond_types: int, num_atom_types: int):
+        self.num_vertices = num_vertices
+        self.num_bond_types = num_bond_types
+        self.num_atom_types = num_atom_types
 
         self.gnn_layer = GATConv(
-            in_channels=m_dim, out_channels=self.conv_dim, edge_dim=b_dim
+            in_channels=self.num_atom_types,
+            out_channels=self.conv_dim,
+            edge_dim=self.num_bond_types,
         )
         self.output_layer = nn.Linear(self.conv_dim, 1)
 
-    def forward(self, adjacency_tensor, hidden, node, activation=None):
-        # Extract batch graphs from adjacency and node feature tensors
+    def _forward(self, adjacency_tensor, node_features, activation=None):
+        # Convert adjacency and node features into PyTorch Geometric Batch objects
         batch_graphs = [
             extract_graphs_from_features({"A": a, "X": x})
-            for a, x in zip(adjacency_tensor, node)
+            for a, x in zip(adjacency_tensor, node_features)
         ]
         batch_graphs = Batch.from_data_list(batch_graphs)
 
-        # Convert node and edge attributes to one-hot encodings
-        # m_dim = self.dataset.atom_num_types
-        # b_dim = self.dataset.bond_num_types
-        # batch_graphs.x = one_hot(batch_graphs.x, m_dim).float()
-        # batch_graphs.edge_attr = one_hot(batch_graphs.edge_attr, b_dim).float()
-
-        # Pass through GNN layer
+        # Pass node features and edges through the GNN layer
         batch_features = self.gnn_layer(
             batch_graphs.x, batch_graphs.edge_index, batch_graphs.edge_attr
         )
 
-        # Reshape and aggregate graph-level features
-        batch_features = batch_features.reshape(
-            batch_graphs.num_graphs, -1, self.conv_dim
-        )
-        batch_features = batch_features.mean(dim=1)
+        # Aggregate graph-level features by averaging over nodes
+        batch_features = batch_features.view(batch_graphs.num_graphs, -1, self.conv_dim)
+        graph_level_features = batch_features.mean(dim=1)
 
-        # Pass through output layer
-        output = self.output_layer(batch_features)
+        # Pass graph-level features through the output layer
+        output = self.output_layer(graph_level_features)
 
-        # Apply activation if provided
+        # Apply optional activation
         if activation is not None:
             output = activation(output)
 
-        return output, None
+        return output, graph_level_features

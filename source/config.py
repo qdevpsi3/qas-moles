@@ -24,9 +24,9 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    generator_type: str = "classical"  # "classical", "quantum"
-    use_shadows: bool = False
-    z_dim: int = 8
+    generator_type: str = "molgan"  # "classical", "quantum"
+    discriminator_type: str = "molgan"  # "classical", "quantum"
+    predictor_type: str = "molgan"  # "classical", "quantum"
 
 
 @dataclass
