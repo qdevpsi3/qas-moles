@@ -1,0 +1,22 @@
+data:
+  batch_size: 32
+  data_path: ./data/gdb9_molecular_dataset.pkl
+general:
+  accelerator: cpu
+  experiment_name: molgan
+  logging_backend: mlflow
+  save_dir: checkpoints
+  stage: train
+model:
+  generator_type: classical
+  use_shadows: false
+  z_dim: 8
+training:
+  agg_method: prod
+  checkpoint_path: null
+  grad_penalty: 10.0
+  learning_rate: 0.001
+  max_epochs: 200
+  n_critic: 5
+  process_method: soft_gumbel
+  train_predictor_on_fake: false
