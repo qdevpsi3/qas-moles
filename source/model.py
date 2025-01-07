@@ -1,11 +1,12 @@
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from lightning import LightningModule
 from rdkit import Chem
 from torch import nn
-import tempfile
-from pathlib import Path
 
 from .metrics import ALL_METRICS
 
@@ -193,7 +194,8 @@ class MolGAN(LightningModule):
         # Compute metrics on real data
         metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
         avg_metrics_real = {
-            f"Validation_step_real_data_{k}": np.mean(v) for k, v in metrics_real.items()
+            f"Validation_step_real_data_{k}": np.mean(v)
+            for k, v in metrics_real.items()
         }
 
         # Compute metrics on generated data
@@ -203,8 +205,10 @@ class MolGAN(LightningModule):
         # }
 
         avg_metrics_fake = {
-            f"Validation_step_fake_data_{k}": np.mean([val for val in v if val is not None])
-        for k, v in metrics_fake.items()
+            f"Validation_step_fake_data_{k}": np.mean(
+                [val for val in v if val is not None]
+            )
+            for k, v in metrics_fake.items()
         }
 
         # Extract SMILES from generated molecules
@@ -227,11 +231,12 @@ class MolGAN(LightningModule):
         )
 
         # Log the smiles as artifacts
-        logger_  = self.logger.experiment
-        logger_.log_text(text="\n".join(smiles_fake), 
-                         artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt", 
-                         run_id=self.logger.run_id)
-        
+        logger_ = self.logger.experiment
+        logger_.log_text(
+            text="\n".join(smiles_fake),
+            artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt",
+            run_id=self.logger.run_id,
+        )
 
         return smiles_fake
 
@@ -309,13 +314,13 @@ class MolGAN(LightningModule):
         return torch.sigmoid(self.predictor(a, None, x)[0])
 
     def _aggregate_metrics(self, metrics):
-        values = np.stack(
+        values = torch.stack(
             [v for metric, v in metrics.items() if metric in self.metrics], axis=-1
         )
         if self.hparams.agg_method == "prod":
-            return np.prod(values, axis=-1)
+            return torch.prod(values, axis=-1)
         elif self.hparams.agg_method == "mean":
-            return np.mean(values, axis=-1)
+            return torch.mean(values, axis=-1)
         else:
             raise ValueError(f"Unknown aggregation method: {self.hparams.agg_method}")
 
@@ -356,7 +361,7 @@ class MolGAN(LightningModule):
         metrics_real = batch.metrics
         v_real = self._aggregate_metrics(metrics_real)
         v_pred_real = self._apply_predictor(a_real, x_real)[..., 0]
-        v_real = torch.from_numpy(v_real).to(self.device).float()
+        # v_real = torch.from_numpy(v_real).to(self.device).float()
         p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
         p_loss_real_per_metric = {
             metric: nn.HuberLoss()(v_real, v) for metric, v in metrics_real.items()
@@ -372,7 +377,7 @@ class MolGAN(LightningModule):
             metrics_fake = self._compute_metrics(a_fake, x_fake)
             v_fake = self._aggregate_metrics(metrics_fake)
             v_pred_fake = self._apply_predictor(a_fake, x_fake)[..., 0]
-            v_fake = torch.from_numpy(v_fake).to(self.device).float()
+            # v_fake = torch.from_numpy(v_fake).to(self.device).float()
             p_loss_fake = nn.HuberLoss()(v_fake, v_pred_fake)
             p_loss_fake_per_metric = {
                 metric: nn.HuberLoss()(
