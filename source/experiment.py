@@ -135,15 +135,15 @@ class Experiment:
 
         self.setup()
 
-        # checkpoint_filename = get_checkpoint_filename(self.cfg)
-        # checkpoint_callback = ModelCheckpoint(
-        #     monitor="Aggregated_metric_during_validation",
-        #     save_top_k=1,
-        #     mode="max",
-        #     dirpath=self.cfg.general.save_dir,
-        #     filename=checkpoint_filename,
-        #     save_last=True,
-        # )
+        checkpoint_filename = get_checkpoint_filename(self.cfg)
+        checkpoint_callback = ModelCheckpoint(
+            monitor="Aggregated_metric_during_validation",
+            save_top_k=1,
+            mode="max",
+            dirpath=self.cfg.general.save_dir,
+            filename=checkpoint_filename,
+            save_last=True,
+        )
 
         logger = prepare_logger(self.cfg, self.model)
         trainer = Trainer(
@@ -151,7 +151,7 @@ class Experiment:
             accelerator=self.cfg.general.accelerator,
             logger=logger,
             log_every_n_steps=1,
-            # callbacks=[checkpoint_callback],
+            callbacks=[checkpoint_callback],
         )
         print(self.model)
         trainer.fit(model=self.model, datamodule=self.datamodule)

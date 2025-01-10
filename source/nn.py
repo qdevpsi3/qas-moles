@@ -7,11 +7,53 @@ import numpy as np
 import pennylane as qml
 import torch
 import torch.nn as nn
-from torch_geometric.data import Batch
-from torch_geometric.nn import GATConv
+from torch_geometric.data import Batch, Data
+from torch_geometric.nn import GATConv, GINConv, SAGEConv, global_mean_pool
+from torchdrug.data import Molecule
 
-from .data import extract_graphs_from_features
 from .layers import GraphAggregation, GraphConvolution, MultiDenseLayers
+
+
+def extract_graphs_from_features(features, library="pyg"):
+    node_features = features["X"]
+    adjacency_matrix = features["A"]
+    edge_indices = (
+        torch.tensor(
+            [
+                (src, dst)
+                for src, row in enumerate(adjacency_matrix)
+                for dst in range(len(row))
+                if adjacency_matrix[src, dst] > 0
+            ],
+            dtype=torch.long,
+        )
+        .t()
+        .contiguous()
+    )
+
+    edge_features = torch.tensor(
+        [adjacency_matrix[src, dst] for src, dst in edge_indices.t()],
+        dtype=torch.long,
+    )
+
+    if library == "pyg":
+        # PyTorch Geometric Data object
+        graph = Data(
+            x=node_features,
+            edge_index=edge_indices,
+            edge_attr=edge_features,
+        )
+    elif library == "torchdrug":
+        # TorchDrug Molecule object
+        graph = Molecule(
+            edge_list=edge_indices.t(),
+            atom_type=node_features[:, 0].long(),
+        )
+    else:
+        raise ValueError(
+            f"Unsupported library: {library}. Choose 'pyg' or 'torchdrug'."
+        )
+    return graph
 
 
 class BaseNN(nn.Module, ABC):
@@ -326,3 +368,129 @@ class GNNDiscriminator(BaseDiscriminator):
             output = activation(output)
 
         return output, graph_level_features
+
+
+@dataclass(unsafe_hash=True)
+class GINDiscriminator(BaseDiscriminator):
+    """
+    A GIN-based Discriminator for MolGAN-like architectures.
+    """
+
+    hidden_dim: int = 128
+    num_layers: int = 2
+    dropout: float = 0.1
+
+    def _build(self, num_vertices: int, num_bond_types: int, num_atom_types: int):
+        self.num_vertices = num_vertices
+        self.num_bond_types = num_bond_types
+        self.num_atom_types = num_atom_types
+
+        # Build multiple GINConv layers
+        self.gin_convs = nn.ModuleList()
+        for layer_idx in range(self.num_layers):
+            # The input dimension for the first layer is num_atom_types;
+            # afterwards, it's hidden_dim
+            mlp_input_dim = self.num_atom_types if layer_idx == 0 else self.hidden_dim
+            mlp = nn.Sequential(
+                nn.Linear(mlp_input_dim, self.hidden_dim),
+                nn.ReLU(),
+                nn.Linear(self.hidden_dim, self.hidden_dim),
+            )
+            self.gin_convs.append(GINConv(mlp))
+
+        self.dropout_layer = nn.Dropout(self.dropout)
+        self.output_layer = nn.Linear(self.hidden_dim, 1)
+
+    def _forward(
+        self, adjacency_tensor, node_features, activation: Optional[nn.Module] = None
+    ):
+        """
+        :param adjacency_tensor: (B, N, N, num_bond_types)
+        :param node_features: (B, N, num_atom_types)
+        :param activation: optional activation function (e.g. torch.nn.Sigmoid)
+        :return: (logits, graph_level_features)
+        """
+        # Convert adjacency and node features into PyTorch Geometric data Batch
+        batch_graphs = [
+            extract_graphs_from_features({"A": a, "X": x})
+            for a, x in zip(adjacency_tensor, node_features)
+        ]
+        batch_graphs = Batch.from_data_list(batch_graphs)
+
+        # x: node feature matrix; edge_index: adjacency list; edge_attr: edge features
+        x, edge_index, edge_attr, batch_idx = (
+            batch_graphs.x,
+            batch_graphs.edge_index,
+            batch_graphs.edge_attr,
+            batch_graphs.batch,
+        )
+
+        # Pass through each GIN layer
+        for gin_conv in self.gin_convs:
+            x = gin_conv(x, edge_index)
+            x = torch.relu(x)
+            x = self.dropout_layer(x)
+
+        # Global average pooling to get graph-level features
+        graph_level_features = global_mean_pool(x, batch_idx)
+
+        # Output layer
+        logits = self.output_layer(graph_level_features)
+
+        # Optional activation
+        if activation is not None:
+            logits = activation(logits)
+
+        return logits, graph_level_features
+
+
+@dataclass(unsafe_hash=True)
+class GraphSAGEDiscriminator(BaseDiscriminator):
+    """
+    A GraphSAGE-based Discriminator for MolGAN-like architectures.
+    """
+
+    hidden_dim: int = 128
+    num_layers: int = 2
+    dropout: float = 0.1
+
+    def _build(self, num_vertices: int, num_bond_types: int, num_atom_types: int):
+        self.num_vertices = num_vertices
+        self.num_bond_types = num_bond_types
+        self.num_atom_types = num_atom_types
+
+        self.convs = nn.ModuleList()
+        for layer_idx in range(self.num_layers):
+            in_dim = self.num_atom_types if layer_idx == 0 else self.hidden_dim
+            self.convs.append(SAGEConv(in_dim, self.hidden_dim))
+
+        self.dropout_layer = nn.Dropout(self.dropout)
+        self.output_layer = nn.Linear(self.hidden_dim, 1)
+
+    def _forward(
+        self, adjacency_tensor, node_features, activation: Optional[nn.Module] = None
+    ):
+        batch_graphs = [
+            extract_graphs_from_features({"A": a, "X": x})
+            for a, x in zip(adjacency_tensor, node_features)
+        ]
+        batch_graphs = Batch.from_data_list(batch_graphs)
+
+        x, edge_index, edge_attr, batch_idx = (
+            batch_graphs.x,
+            batch_graphs.edge_index,
+            batch_graphs.edge_attr,
+            batch_graphs.batch,
+        )
+
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = torch.relu(x)
+            x = self.dropout_layer(x)
+
+        graph_level_features = global_mean_pool(x, batch_idx)
+        logits = self.output_layer(graph_level_features)
+        if activation is not None:
+            logits = activation(logits)
+
+        return logits, graph_level_features

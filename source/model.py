@@ -178,32 +178,13 @@ class MolGAN(LightningModule):
             )
 
     def validation_step(self, batch, batch_idx):
-        # Similar to test_step but for validation data
-        # Process the real data
-        a_real, x_real = batch.features["A"].to(self.device), batch.features["X"].to(
-            self.device
-        )
-        a_real_onehot, x_real_onehot = self._process_real_data(a_real, x_real)
-
         # Generate fake data
         a_fake_logits, x_fake_logits = self._generate_fake_data(batch)
         a_fake_onehot, x_fake_onehot = self._process_fake_data(
             a_fake_logits, x_fake_logits
         )
-
-        # Compute metrics on real data
-        metrics_real = self._compute_metrics(a_real_onehot, x_real_onehot)
-        avg_metrics_real = {
-            f"Validation_step_real_data_{k}": np.mean(v)
-            for k, v in metrics_real.items()
-        }
-
         # Compute metrics on generated data
         metrics_fake = self._compute_metrics(a_fake_onehot, x_fake_onehot)
-        # avg_metrics_fake = {
-        #     f"Validation_step_fake_data_{k}": np.mean(v) for k, v in metrics_fake.items()
-        # }
-
         avg_metrics_fake = {
             f"Validation_step_fake_data_{k}": np.mean(
                 [val for val in v if val is not None]
@@ -216,7 +197,6 @@ class MolGAN(LightningModule):
         smiles_fake = [mol_to_smiles(mol) for mol in mols_fake if mol is not None]
 
         # Log the metrics
-        self.log_dict(avg_metrics_real, on_epoch=True, prog_bar=True, logger=True)
         self.log_dict(avg_metrics_fake, on_epoch=True, prog_bar=True, logger=True)
 
         # Optionally, compute an aggregated validation metric
