@@ -127,7 +127,7 @@ class MolGAN(LightningModule):
         d_optim.step()
         d_optim.zero_grad()
         self.log(
-            "Discriminator Loss",
+            "Discriminator_Loss",
             d_loss,
             on_step=True,
             on_epoch=True,
@@ -142,7 +142,7 @@ class MolGAN(LightningModule):
         p_optim.step()
         p_optim.zero_grad()
         self.log(
-            "Predictor_loss",
+            "Predictor_Loss",
             p_loss,
             on_step=True,
             on_epoch=True,
@@ -211,12 +211,12 @@ class MolGAN(LightningModule):
         )
 
         # Log the smiles as artifacts
-        logger_ = self.logger.experiment
-        logger_.log_text(
-            text="\n".join(smiles_fake),
-            artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt",
-            run_id=self.logger.run_id,
-        )
+        # logger_ = self.logger.experiment
+        # logger_.log_text(
+        #     text="\n".join(smiles_fake),
+        #     artifact_file=f"smiles_generated_epoch_{self.current_epoch}.txt",
+        #     run_id=self.logger.run_id,
+        # )
 
         return smiles_fake
 

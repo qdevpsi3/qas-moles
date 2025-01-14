@@ -105,7 +105,8 @@ class Experiment:
         self.dataset = MolecularDataset.load(self.cfg.data.data_path)
         self.datamodule = MolecularDataModule(
             self.dataset,
-            batch_size=self.cfg.data.batch_size,
+            train_batch_size=self.cfg.data.train_batch_size,
+            test_batch_size=self.cfg.data.test_batch_size,
         )
         self.datamodule.setup()
         self.num_vertices = self.dataset.num_vertices
@@ -135,23 +136,26 @@ class Experiment:
 
         self.setup()
 
-        checkpoint_filename = get_checkpoint_filename(self.cfg)
-        checkpoint_callback = ModelCheckpoint(
-            monitor="Aggregated_metric_during_validation",
-            save_top_k=1,
-            mode="max",
-            dirpath=self.cfg.general.save_dir,
-            filename=checkpoint_filename,
-            save_last=True,
-        )
+        # checkpoint_filename = get_checkpoint_filename(self.cfg)
+        # checkpoint_callback = ModelCheckpoint(
+        #     monitor="Aggregated_metric_during_validation",
+        #     save_top_k=1,
+        #     mode="max",
+        #     dirpath=self.cfg.general.save_dir,
+        #     filename=checkpoint_filename,
+        #     save_last=True,
+        # )
 
-        logger = prepare_logger(self.cfg, self.model)
+        # logger = prepare_logger(self.cfg, self.model)
         trainer = Trainer(
             max_epochs=self.cfg.training.max_epochs,
             accelerator=self.cfg.general.accelerator,
-            logger=logger,
+            # logger=logger,
+            limit_train_batches=10,
+            limit_test_batches=1,
+            limit_val_batches=1,
             log_every_n_steps=1,
-            callbacks=[checkpoint_callback],
+            # callbacks=[checkpoint_callback],
         )
         print(self.model)
         trainer.fit(model=self.model, datamodule=self.datamodule)

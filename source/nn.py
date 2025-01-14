@@ -402,14 +402,11 @@ class GINDiscriminator(BaseDiscriminator):
         self.output_layer = nn.Linear(self.hidden_dim, 1)
 
     def _forward(
-        self, adjacency_tensor, node_features, activation: Optional[nn.Module] = None
+        self,
+        adjacency_tensor,
+        node_features,
+        activation: Optional[nn.Module] = None,
     ):
-        """
-        :param adjacency_tensor: (B, N, N, num_bond_types)
-        :param node_features: (B, N, num_atom_types)
-        :param activation: optional activation function (e.g. torch.nn.Sigmoid)
-        :return: (logits, graph_level_features)
-        """
         # Convert adjacency and node features into PyTorch Geometric data Batch
         batch_graphs = [
             extract_graphs_from_features({"A": a, "X": x})

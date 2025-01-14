@@ -19,7 +19,8 @@ class GeneralConfig:
 @dataclass
 class DataConfig:
     data_path: str = "./data/gdb9_molecular_dataset.pkl"
-    batch_size: int = 32
+    train_batch_size: int = 32
+    test_batch_size: int = 2048
 
 
 @dataclass
