@@ -208,7 +208,10 @@ def extract_smiles(mols):
 
 def extract_metrics(mols, metrics=["logp", "qed", "np", "sas"]):
     """Extracts the specified metrics for the molecules."""
-    results = {metric: ALL_METRICS[metric]().compute_score(mols) for metric in metrics}
+    results = {
+        metric: ALL_METRICS[metric](parallel=True, n_jobs=None).compute_score(mols)
+        for metric in metrics
+    }
     return results
 
 
@@ -337,12 +340,13 @@ class MolecularDataModule(LightningDataModule):
         self,
         dataset,
         *,
-        batch_size=32,
+        train_batch_size=32,
+        test_batch_size=32,
         train_test_val_split=(0.8, 0.1, 0.1),
     ):
         super().__init__()
         # Save the batch size as a hyperparameter
-        self.save_hyperparameters("batch_size")
+        self.save_hyperparameters("train_batch_size", "test_batch_size")
         # Save the dataset
         self.dataset = dataset
         self.train_test_val_split = train_test_val_split
@@ -372,7 +376,7 @@ class MolecularDataModule(LightningDataModule):
         # Returns the training dataloader.
         return DataLoader(
             self.train_dataset,
-            batch_size=self.hparams.batch_size,
+            batch_size=self.hparams.train_batch_size,
             shuffle=True,
             collate_fn=collate_fn,
         )
@@ -381,7 +385,7 @@ class MolecularDataModule(LightningDataModule):
         # Returns the validation dataloader.
         return DataLoader(
             self.val_dataset,
-            batch_size=self.hparams.batch_size,
+            batch_size=self.hparams.test_batch_size,
             collate_fn=collate_fn,
         )
 
@@ -389,6 +393,6 @@ class MolecularDataModule(LightningDataModule):
         # Returns the testing dataloader.
         return DataLoader(
             self.test_dataset,
-            batch_size=self.hparams.batch_size,
+            batch_size=self.hparams.test_batch_size,
             collate_fn=collate_fn,
         )
