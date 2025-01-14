@@ -10,3 +10,4 @@ torch_geometric==2.6.1
 torchdrug==0.2.1
 torchmetrics==1.4.1
 tqdm==4.66.5
+mordred==1.2.0
