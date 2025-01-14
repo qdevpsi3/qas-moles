@@ -65,6 +65,7 @@ class MolGAN(LightningModule):
         process_method="soft_gumbel",
         agg_method="prod",
         train_predictor_on_fake=False,
+        parallel_jobs=-1,
     ):
         super().__init__()
         self.automatic_optimization = False  # Disable automatic optimization
@@ -85,8 +86,11 @@ class MolGAN(LightningModule):
         self.optimizer = optimizer
         self.metrics = self.dataset.metrics
 
+        parallel = True if parallel_jobs != 1 else False
+        n_jobs = None if parallel_jobs == -1 else parallel_jobs
         self.metrics_fn = dict(
-            (metric, ALL_METRICS[metric]()) for metric in self.metrics
+            (metric, ALL_METRICS[metric](parallel=parallel, n_jobs=n_jobs))
+            for metric in self.metrics
         )
 
     def configure_optimizers(self):
