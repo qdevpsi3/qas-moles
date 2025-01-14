@@ -298,13 +298,13 @@ class MolGAN(LightningModule):
         return torch.sigmoid(self.predictor(x, a)[0])
 
     def _aggregate_metrics(self, metrics):
-        values = np.stack(
+        values = torch.stack(
             [v for metric, v in metrics.items() if metric in self.metrics], axis=-1
         )
         if self.hparams.agg_method == "prod":
-            return np.prod(values, axis=-1)
+            return torch.prod(values, axis=-1)
         elif self.hparams.agg_method == "mean":
-            return np.mean(values, axis=-1)
+            return torch.mean(values, axis=-1)
         else:
             raise ValueError(f"Unknown aggregation method: {self.hparams.agg_method}")
 
@@ -345,7 +345,6 @@ class MolGAN(LightningModule):
         metrics_real = batch.metrics
         v_real = self._aggregate_metrics(metrics_real)
         v_pred_real = self._apply_predictor(a_real, x_real)[..., 0]
-        v_real = torch.from_numpy(v_real).to(self.device).float()
         p_loss_real = nn.HuberLoss()(v_real, v_pred_real)
         p_loss_real_per_metric = {
             metric: nn.HuberLoss()(v_real, v) for metric, v in metrics_real.items()
@@ -361,7 +360,6 @@ class MolGAN(LightningModule):
             metrics_fake = self._compute_metrics(a_fake, x_fake)
             v_fake = self._aggregate_metrics(metrics_fake)
             v_pred_fake = self._apply_predictor(a_fake, x_fake)[..., 0]
-            v_fake = torch.from_numpy(v_fake).to(self.device).float()
             p_loss_fake = nn.HuberLoss()(v_fake, v_pred_fake)
             p_loss_fake_per_metric = {
                 metric: nn.HuberLoss()(
