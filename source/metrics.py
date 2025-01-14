@@ -2,14 +2,23 @@ import gzip
 import math
 import multiprocessing
 import pickle
+import time
 import warnings
-from functools import partial
 
 import numpy as np
 import torch
+from mordred import Calculator, descriptors
 from rdkit import Chem, DataStructs, RDLogger
-from rdkit.Chem import QED, Crippen
+from rdkit.Chem import QED
 from torchmetrics import Metric
+
+# Define a custom logP function using Mordred
+_calc = Calculator(descriptors.SLogP, ignore_3D=True)
+
+
+def custom_logp(mol):
+    return _calc(mol)[0]
+
 
 # Suppress RDKit warnings using RDLogger
 lg = RDLogger.logger()
@@ -35,7 +44,6 @@ def _worker_func(args):
     mol, func, default = args
     if mol is None:
         return default
-
     val = _call_rdkit_func(func, mol)
     return val if val is not None else default
 
@@ -65,6 +73,9 @@ def _constant_bump(x, x_low, x_high, decay=0.025):
     )
 
 
+pool = None
+
+
 class MolecularMetric(Metric):
     """Base class for calculating molecular metrics. Implements basic functionality for metric calculation and aggregation."""
 
@@ -79,7 +90,11 @@ class MolecularMetric(Metric):
         self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
 
         self.parallel = parallel
-        self.n_jobs = n_jobs
+        if self.parallel:
+            global pool
+            self.n_jobs = n_jobs or multiprocessing.cpu_count()
+            if pool is None:
+                pool = multiprocessing.Pool(processes=self.n_jobs)
 
     @staticmethod
     def _valid_molecule(mol):
@@ -122,11 +137,10 @@ class MolecularMetric(Metric):
 
         else:
             # Parallel
-            processes = self.n_jobs or multiprocessing.cpu_count()
-            with multiprocessing.Pool(processes=processes) as pool:
-                # Each item in the list is (mol, func, default)
-                args_iter = [(mol, func, default) for mol in mols]
-                results = pool.map(_worker_func, args_iter)
+            # with multiprocessing.Pool(processes=self.n_jobs) as pool:
+            args_iter = [(mol, func, default) for mol in mols]
+            results = pool.map(_worker_func, args_iter)
+            # results = pool.map(func, mols)
             return np.array(results, dtype=float)
 
 
@@ -136,7 +150,7 @@ class WOPCScore(MolecularMetric):
     _molgan_label = "logp"
     _molgan_func = "water_octanol_partition_coefficient"
 
-    def __init__(self, norm=True, dist_sync_on_step=False, parallel=False, n_jobs=None):
+    def __init__(self, norm=True, dist_sync_on_step=False, parallel=True, n_jobs=None):
         super().__init__(
             dist_sync_on_step=dist_sync_on_step,
             parallel=parallel,
@@ -145,8 +159,7 @@ class WOPCScore(MolecularMetric):
         self.norm = norm
 
     def compute_score(self, mols):
-        # Range from RDKit or your domain knowledge
-        scores = self._map_scoring_func(Crippen.MolLogP, -3.0, mols)
+        scores = self._map_scoring_func(custom_logp, -3.0, mols)
         if self.norm:
             scores = _normalize_score(scores, (-2.12178879609, 6.0429063424))
             scores = np.clip(scores, 0.0, 1.0)
@@ -159,7 +172,7 @@ class QEDScore(MolecularMetric):
     _molgan_label = "qed"
     _molgan_func = "quantitative_estimation_druglikeness"
 
-    def __init__(self, norm=None, dist_sync_on_step=False, parallel=False, n_jobs=None):
+    def __init__(self, norm=None, dist_sync_on_step=False, parallel=True, n_jobs=None):
         super().__init__(
             dist_sync_on_step=dist_sync_on_step, parallel=parallel, n_jobs=n_jobs
         )
@@ -167,9 +180,25 @@ class QEDScore(MolecularMetric):
         self.norm = norm
 
     def compute_score(self, mols):
-        # If norm is relevant, handle it here
         scores = self._map_scoring_func(QED.qed, 0.0, mols)
         return scores
+
+
+def np_func(mol, np_model):
+    if mol is None:
+        return -4  # Default score for invalid molecules
+
+    # Get Morgan Fingerprint bits and their counts
+    bits = Chem.rdMolDescriptors.GetMorganFingerprint(mol, 2).GetNonzeroElements()
+    score = sum(np_model.get(bit, 0) for bit in bits) / float(mol.GetNumAtoms())
+
+    # Apply logarithmic transformation for out-of-range scores
+    if score > 4:
+        score = 4 + math.log10(score - 4 + 1)
+    elif score < -4:
+        score = -4 - math.log10(-4 - score + 1)
+
+    return score
 
 
 class NPScore(MolecularMetric):
@@ -193,34 +222,45 @@ class NPScore(MolecularMetric):
         self.np_model_path = np_model_path
         self.np_model = pickle.load(gzip.open(np_model_path, "rb"))
 
+    # def compute_score(self, mols):
+    #     raw_scores = []
+    #     for mol in mols:
+    #         if mol is None:
+    #             raw_scores.append(None)
+    #             continue
+
+    #         bits = Chem.rdMolDescriptors.GetMorganFingerprint(
+    #             mol, 2
+    #         ).GetNonzeroElements()
+    #         score = sum(self.np_model.get(bit, 0) for bit in bits) / float(
+    #             mol.GetNumAtoms()
+    #         )
+    #         raw_scores.append(score)
+
+    #     # Logarithmic transform for out-of-range scores
+    #     transformed = []
+    #     for sc in raw_scores:
+    #         if sc is None:
+    #             transformed.append(-4)
+    #         else:
+    #             if sc > 4:
+    #                 sc = 4 + math.log10(sc - 4 + 1)
+    #             elif sc < -4:
+    #                 sc = -4 - math.log10(-4 - sc + 1)
+    #             transformed.append(sc)
+
+    #     scores = np.array(transformed, dtype=float)
+    #     if self.norm:
+    #         scores = _normalize_score(scores, (-3.0, 1.0))
+    #     scores = np.clip(scores, 0.0, 1.0)
+    #     return scores
+
     def compute_score(self, mols):
-        raw_scores = []
-        for mol in mols:
-            if mol is None:
-                raw_scores.append(None)
-                continue
+        from functools import partial
 
-            bits = Chem.rdMolDescriptors.GetMorganFingerprint(
-                mol, 2
-            ).GetNonzeroElements()
-            score = sum(self.np_model.get(bit, 0) for bit in bits) / float(
-                mol.GetNumAtoms()
-            )
-            raw_scores.append(score)
+        func = partial(np_func, np_model=self.np_model)
 
-        # Logarithmic transform for out-of-range scores
-        transformed = []
-        for sc in raw_scores:
-            if sc is None:
-                transformed.append(-4)
-            else:
-                if sc > 4:
-                    sc = 4 + math.log10(sc - 4 + 1)
-                elif sc < -4:
-                    sc = -4 - math.log10(-4 - sc + 1)
-                transformed.append(sc)
-
-        scores = np.array(transformed, dtype=float)
+        scores = self._map_scoring_func(func, -4, mols)
         if self.norm:
             scores = _normalize_score(scores, (-3.0, 1.0))
         scores = np.clip(scores, 0.0, 1.0)
@@ -238,7 +278,7 @@ class SASScore(MolecularMetric):
         norm=False,
         sa_model_path="./data/SA_score.pkl.gz",
         dist_sync_on_step=False,
-        parallel=False,
+        parallel=True,
         n_jobs=None,
     ):
         super().__init__(
@@ -316,13 +356,14 @@ class SASScore(MolecularMetric):
     def compute_score(self, mols):
         # For full parallelization, you could do _map_scoring_func(self._compute_SAS, 10.0, mols)
         # Instead, we do a simple loop here:
-        scores = []
-        for mol in mols:
-            if mol is not None:
-                val = self._compute_SAS(mol)
-                scores.append(val)
-            else:
-                scores.append(10.0)  # default for invalid
+        # scores = []
+        # for mol in mols:
+        #     if mol is not None:
+        #         val = self._compute_SAS(mol)
+        #         scores.append(val)
+        #     else:
+        #         scores.append(10.0)  # default for invalid
+        scores = self._map_scoring_func(self._compute_SAS, 10.0, mols)
         scores = np.array(scores, dtype=float)
         if self.norm:
             scores = _normalize_score(scores, (5.0, 1.5))
@@ -336,7 +377,7 @@ class NoveltyScore(MolecularMetric):
     _molgan_label = "novelty"
     _molgan_func = "novel"
 
-    def __init__(self, data, dist_sync_on_step=False, parallel=False, n_jobs=None):
+    def __init__(self, data, dist_sync_on_step=False, parallel=True, n_jobs=None):
         super().__init__(
             dist_sync_on_step=dist_sync_on_step, parallel=parallel, n_jobs=n_jobs
         )
@@ -357,7 +398,7 @@ class DCScore(MolecularMetric):
     _molgan_label = "dc"
     _molgan_func = "drugcandidate"
 
-    def __init__(self, data, dist_sync_on_step=False, parallel=False, n_jobs=None):
+    def __init__(self, data, dist_sync_on_step=False, parallel=True, n_jobs=None):
         super().__init__(
             dist_sync_on_step=dist_sync_on_step, parallel=parallel, n_jobs=n_jobs
         )
@@ -405,7 +446,7 @@ class DiversityScore(MolecularMetric):
     _molgan_label = "diversity"
     _molgan_func = "diversity"
 
-    def __init__(self, data, dist_sync_on_step=False, parallel=False, n_jobs=None):
+    def __init__(self, data, dist_sync_on_step=False, parallel=True, n_jobs=None):
         super().__init__(
             dist_sync_on_step=dist_sync_on_step, parallel=parallel, n_jobs=n_jobs
         )
@@ -466,22 +507,66 @@ ALL_METRICS = {
 
 
 if __name__ == "__main__":
-    # Example usage:
-    mols = [Chem.MolFromSmiles("CCO"), Chem.MolFromSmiles("CCC"), None]
+    # Generate a large list of molecules for benchmarking
+    smiles_list = [
+        "CCO",
+        "CCC",
+        "CCN",
+        "CCCl",
+        "CCBr",
+        "CCCC",
+        "CC(C)C",
+        "CCOCC",
+        "CCOCCC",
+        "CCN(CC)CC",
+    ] * 10000  # Repeat to create a large dataset
+    mols = [Chem.MolFromSmiles(smiles) for smiles in smiles_list]
 
-    # Suppose you want to run in parallel with 2 processes:
-    metrics_to_try = [
-        WOPCScore(parallel=False, n_jobs=2),
-        # QEDScore(parallel=True, n_jobs=2),
-        # SASScore(parallel=True, n_jobs=2),
-        # UniqueScore(parallel=True, n_jobs=2),
-        # ValidityScore(parallel=True, n_jobs=2),
-    ]
+    # Define metrics to benchmark
+    metrics = [WOPCScore, QEDScore, NPScore, SASScore]
 
-    for metric in metrics_to_try:
-        metric.update(mols)
-        aggregated_score = metric.compute()  # aggregated
-        per_molecule_scores = metric.compute_score(mols)  # per-molecule
-        print(
-            f"{metric._molgan_label} -> Aggregated: {aggregated_score}, Per-mol: {per_molecule_scores}"
-        )
+    # Define the number of parallel jobs to benchmark
+    job_counts = [1, 2, 4, 8, None]  # None uses all available CPUs
+
+    for mclass in metrics:
+        print(f"\nBenchmarking {mclass.__name__}")
+
+        # Benchmark sequential execution
+        sequential_metric = mclass(parallel=False)
+        start_time = time.time()
+        sequential_metric.update(mols)
+        sequential_time = time.time() - start_time
+        print(f"Sequential execution time: {sequential_time:.2f} seconds")
+        sequential_scores = sequential_metric.compute_score(mols)
+
+        # Benchmark parallel execution with different numbers of jobs
+        for n_jobs in job_counts:
+            print(f"\nTesting parallel execution with n_jobs={n_jobs}")
+            parallel_metric = mclass(parallel=True, n_jobs=n_jobs)
+            start_time = time.time()
+            parallel_metric.update(mols)
+            parallel_time = time.time() - start_time
+            print(
+                f"Parallel execution time with n_jobs={n_jobs}: {parallel_time:.2f} seconds"
+            )
+
+            # Compare results
+            parallel_scores = parallel_metric.compute_score(mols)
+            if np.allclose(parallel_scores, sequential_scores):
+                print(
+                    f"Results are identical between parallel (n_jobs={n_jobs}) and sequential execution."
+                )
+            else:
+                print(
+                    f"WARNING: Results differ for parallel (n_jobs={n_jobs}) and sequential execution."
+                )
+
+            # Print speedup factor
+            if parallel_time < sequential_time:
+                print(
+                    f"Speedup factor with n_jobs={n_jobs}: {sequential_time / parallel_time:.2f}x (parallel faster)"
+                )
+            else:
+                print(
+                    f"Speedup factor with n_jobs={n_jobs}: {parallel_time / sequential_time:.2f}x (sequential slower)"
+                )
