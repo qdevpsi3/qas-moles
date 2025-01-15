@@ -28,6 +28,7 @@ discriminators = {
         conv_dims=((128, 64), 128, (128, 64)),
         with_features=False,
     ),
+    "gnn_v0": GNNDiscriminator(),
 }
 
 predictors = {"molgan": discriminators["molgan"]}
@@ -151,7 +152,7 @@ class Experiment:
             max_epochs=self.cfg.training.max_epochs,
             accelerator=self.cfg.general.accelerator,
             # logger=logger,
-            limit_train_batches=10,
+            # limit_train_batches=10,
             limit_test_batches=1,
             limit_val_batches=1,
             log_every_n_steps=1,
